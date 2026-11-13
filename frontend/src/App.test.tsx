@@ -1,0 +1,191 @@
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import * as Blockly from 'blockly/core';
+import { App } from './App';
+import { api } from './pipeline/api';
+import { compileWorkspace, seedWorkspace } from './blockly/workspace';
+import type { Run, SavedPipeline } from './pipeline/types';
+
+vi.mock('./pipeline/api', () => ({ api: { load: vi.fn(), save: vi.fn(), run: vi.fn(), getRun: vi.fn() } }));
+vi.mock('./blockly/BlockEditor', async () => {
+  const { forwardRef, useEffect, useImperativeHandle, useState } = await import('react');
+  const Blockly = await import('blockly/core');
+  const { seedWorkspace } = await import('./blockly/workspace');
+  return { BlockEditor: forwardRef(function TestEditor({ initialWorkspace, onReady }: { initialWorkspace?: Record<string, unknown>; onReady: () => void }, ref) {
+    const [workspace] = useState(() => new Blockly.Workspace());
+    useImperativeHandle(ref, () => ({ workspace: () => workspace }));
+    useEffect(() => {
+      if (initialWorkspace) Blockly.serialization.workspaces.load(initialWorkspace, workspace);
+      else seedWorkspace(workspace);
+      onReady();
+      return () => workspace.dispose();
+    }, []);
+    return <div aria-label="Test block editor" />;
+  }) };
+});
+
+let saved: SavedPipeline;
+beforeEach(() => {
+  history.replaceState(null, '', '/');
+  const workspace = new Blockly.Workspace();
+  seedWorkspace(workspace);
+  workspace.getBlockById('csv')!.setFieldValue('saved-customers.csv', 'PATH');
+  saved = { id: 'pipeline-1', revision: 4, document: { name: 'Saved export', workspace: Blockly.serialization.workspaces.save(workspace),
+    definition: compileWorkspace(workspace), environments: { test: { INPUT_FILE: 'saved-customers.csv', OUTPUT_FILE: 'saved.parquet' } } } };
+  workspace.dispose();
+  vi.mocked(api.load).mockReset().mockResolvedValue(saved);
+  vi.mocked(api.save).mockReset().mockResolvedValue({ ...saved, revision: 5 });
+  vi.mocked(api.run).mockReset();
+  vi.mocked(api.getRun).mockReset();
+});
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it('automatically opens the saved workspace and uses its revision when saving', async () => {
+  render(<App pipelineId="pipeline-1" />);
+  expect(await screen.findByLabelText('Pipeline name')).toHaveValue('Saved export');
+  expect(await screen.findByText('Revision 4 · saved')).toBeInTheDocument();
+
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Save' }));
+
+  expect(api.save).toHaveBeenCalledWith('pipeline-1', 4, expect.objectContaining({ name: 'Saved export', definition: saved.document.definition }));
+  expect(await screen.findByText('Saved revision 5.')).toBeInTheDocument();
+});
+
+it('exports the latest saved revision from the designer', async () => {
+  const createObjectURL = vi.fn().mockReturnValue('blob:export');
+  vi.stubGlobal('URL', Object.assign(class extends URL {}, { createObjectURL, revokeObjectURL: vi.fn() }));
+  render(<App pipelineId="pipeline-1" />);
+  await screen.findByLabelText('Pipeline name');
+
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Export pipeline as JSON' }));
+
+  expect(await screen.findByText('Exported Saved export.json.')).toBeInTheDocument();
+  expect(api.load).toHaveBeenCalledTimes(2);
+  expect(api.load).toHaveBeenLastCalledWith('pipeline-1');
+  expect(createObjectURL).toHaveBeenCalledOnce();
+});
+
+it('requires designer changes to be saved before export', async () => {
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  const name = await screen.findByLabelText('Pipeline name');
+  await user.clear(name);
+  await user.type(name, 'Unsaved name');
+  await user.click(screen.getByRole('button', { name: 'Export pipeline as JSON' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Save changes before exporting.');
+  expect(api.load).toHaveBeenCalledOnce();
+});
+
+it('switches between the canvas and a read-only executable JSON view without losing the canvas', async () => {
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  await screen.findByLabelText('Pipeline name');
+  const canvasTab = screen.getByRole('tab', { name: 'Canvas' });
+  const jsonTab = screen.getByRole('tab', { name: 'Executable JSON (read-only)' });
+  expect(canvasTab).toHaveAttribute('aria-selected', 'true');
+  expect(screen.queryByRole('tabpanel', { name: 'Executable JSON' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Executable JSON', { selector: 'summary' })).not.toBeInTheDocument();
+
+  await user.click(jsonTab);
+
+  expect(jsonTab).toHaveAttribute('aria-selected', 'true');
+  expect(document.getElementById('designer-canvas')).toHaveAttribute('hidden');
+  const json = within(screen.getByRole('tabpanel', { name: 'Executable JSON' }));
+  const view = json.getByText(/"formatVersion": 1/);
+  expect(JSON.parse(view.textContent!)).toEqual(saved.document.definition);
+  expect(view.tagName).toBe('PRE');
+  expect(json.queryByRole('textbox')).not.toBeInTheDocument();
+
+  await user.click(canvasTab);
+
+  expect(screen.getByRole('tabpanel', { name: 'Canvas' })).toBeVisible();
+  expect(screen.getByLabelText('Test block editor')).toBeInTheDocument();
+});
+
+it('opens the collapsed environments panel automatically when its contents are invalid', async () => {
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  await screen.findByLabelText('Pipeline name');
+  const panel = screen.getByText('Environments').closest('details')!;
+  expect(panel).not.toHaveAttribute('open');
+
+  await user.click(screen.getByText('Environments'));
+  expect(panel).toHaveAttribute('open');
+  await user.clear(screen.getByLabelText('Environment name'));
+  await user.click(screen.getByText('Environments'));
+
+  expect(panel).toHaveAttribute('open');
+  expect(within(panel).getByText('— needs attention')).toBeInTheDocument();
+});
+
+it('edits environments with the form and blocks saving while they are invalid', async () => {
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  const value = await screen.findByLabelText('Value of INPUT_FILE in test');
+
+  await user.clear(value);
+  await user.type(value, 'orders.csv');
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  expect(api.save).toHaveBeenLastCalledWith('pipeline-1', 4, expect.objectContaining({
+    environments: { test: { INPUT_FILE: 'orders.csv', OUTPUT_FILE: 'saved.parquet' } } }));
+
+  vi.mocked(api.save).mockClear();
+  await user.clear(screen.getByLabelText('Name of variable 1 in test'));
+  await user.type(screen.getByLabelText('Name of variable 1 in test'), 'BAD NAME');
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+
+  expect(api.save).not.toHaveBeenCalled();
+  expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('must start with a letter or underscore'))).toBe(true);
+});
+
+it('does not replace a failed load with an editable new pipeline', async () => {
+  vi.mocked(api.load).mockRejectedValue(new Error('Pipeline not found.'));
+  render(<App pipelineId="missing" />);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Pipeline not found.');
+  expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Back to pipelines' })).toHaveAttribute('href', '/');
+  expect(within(screen.getByRole('banner')).getByText('Designer')).toBeInTheDocument();
+});
+
+it('creates a new draft without loading a saved pipeline or showing old header content', async () => {
+  render(<App />);
+  expect(await screen.findByLabelText('Pipeline name')).toHaveValue('New pipeline');
+  expect(api.load).not.toHaveBeenCalled();
+  const header = within(screen.getByRole('banner'));
+  expect(header.getByRole('heading', { name: 'Pipeline Builder', level: 1 })).toBeInTheDocument();
+  expect(header.getByText('Designer')).toBeInTheDocument();
+  expect(header.queryByRole('link')).not.toBeInTheDocument();
+  expect(screen.queryByText('CSV in. Typed transformations. Parquet out.')).not.toBeInTheDocument();
+  expect(screen.queryByText('POC · server files · fail-fast')).not.toBeInTheDocument();
+});
+
+it('keeps the editor and environments without run panels or extra canvas bars', async () => {
+  const { container } = render(<App />);
+  await screen.findByLabelText('Pipeline name');
+
+  expect(screen.getByLabelText('Test block editor')).toBeInTheDocument();
+  expect(screen.getByText('Environments').closest('details')).not.toHaveAttribute('open');
+  expect(screen.queryByRole('heading', { name: 'Run' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Open saved pipeline' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add map / convert' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add filter' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('navigation', { name: 'Pipeline steps' })).not.toBeInTheDocument();
+  expect(container.querySelector('.canvas-actions, .step-list')).not.toBeInTheDocument();
+});
+
+it('still saves and starts a run with feedback outside the removed panel', async () => {
+  const queued: Run = { id: 'run-1', pipelineId: saved.id, revision: 5, environment: 'test', status: 'Queued',
+    rowsRead: 0, rowsWritten: 0, error: null, blockId: null, createdAt: '2026-11-12T12:00:00Z', startedAt: null, finishedAt: null, trigger: 'Manual' };
+  vi.mocked(api.run).mockResolvedValue(queued);
+  vi.mocked(api.getRun).mockResolvedValue({ ...queued, status: 'Succeeded' });
+  render(<App pipelineId={saved.id} />);
+  await screen.findByLabelText('Pipeline name');
+
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Save & run' }));
+
+  expect(api.run).toHaveBeenCalledWith(saved.id, 5, 'test');
+  expect(await screen.findByText('Run run-1 queued. Results are available in execution logs.')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Run' })).not.toBeInTheDocument();
+});

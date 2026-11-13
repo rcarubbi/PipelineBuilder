@@ -1,0 +1,21 @@
+using FluentValidation;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using PipelineBuilder.Application.Interfaces;
+using PipelineBuilder.Application.Validation;
+
+namespace PipelineBuilder.Application;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(this IServiceCollection services)
+    {
+        services.TryAddSingleton(TimeProvider.System);
+        services.Scan(scan => scan.FromAssemblyOf<IInput>().AddClasses(c => c.AssignableTo(typeof(IUseCase<,>)).Where(t => !t.ContainsGenericParameters))
+            .AsImplementedInterfaces().WithScopedLifetime());
+        services.AddValidatorsFromAssemblyContaining<DefinitionValidator>();
+        services.Decorate(typeof(IUseCase<,>), typeof(TransactionDecorator<,>));
+        services.Decorate(typeof(IUseCase<,>), typeof(ValidationDecorator<,>));
+        return services;
+    }
+}

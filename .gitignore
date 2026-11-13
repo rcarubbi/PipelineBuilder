@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/coverage/
+**/TestResults/
+.vs/
+.env
+data/output/*
+!data/output/.gitkeep
+*.user
+*.log
+frontend/public/blockly/

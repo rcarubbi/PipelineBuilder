@@ -1,0 +1,16 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+
+[*.cs]
+indent_size = 4
+dotnet_sort_system_directives_first = true
+# The backend deliberately uses ct throughout cancellation chains, including framework implementations.
+dotnet_diagnostic.S927.severity = none
+# Cancellation is explicit even where framework interfaces declare an optional token.
+dotnet_diagnostic.S1006.severity = none

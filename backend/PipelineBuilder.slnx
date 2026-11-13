@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PipelineBuilder.Domain/PipelineBuilder.Domain.csproj" />
+    <Project Path="src/PipelineBuilder.Application/PipelineBuilder.Application.csproj" />
+    <Project Path="src/PipelineBuilder.Infrastructure/PipelineBuilder.Infrastructure.csproj" />
+    <Project Path="src/PipelineBuilder.Presentation/PipelineBuilder.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PipelineBuilder.Domain.Tests/PipelineBuilder.Domain.Tests.csproj" />
+    <Project Path="tests/PipelineBuilder.Application.Tests/PipelineBuilder.Application.Tests.csproj" />
+    <Project Path="tests/PipelineBuilder.Infrastructure.Tests/PipelineBuilder.Infrastructure.Tests.csproj" />
+    <Project Path="tests/PipelineBuilder.Architecture.Tests/PipelineBuilder.Architecture.Tests.csproj" />
+  </Folder>
+</Solution>

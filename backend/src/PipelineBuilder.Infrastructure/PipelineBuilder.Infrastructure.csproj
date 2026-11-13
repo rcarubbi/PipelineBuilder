@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../PipelineBuilder.Application/PipelineBuilder.Application.csproj" />
+    <PackageReference Include="CsvHelper" />
+    <PackageReference Include="Parquet.Net" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="TickerQ" />
+    <PackageReference Include="TickerQ.Dashboard" />
+    <!-- Same five-field cron parser TickerQ uses, so validation and previews match execution. -->
+    <PackageReference Include="NCrontab.Signed" />
+    <!-- Pin the dashboard's legacy SpaServices dependency to a patched JSON release. -->
+    <PackageReference Include="Newtonsoft.Json" />
+    <PackageReference Include="Microsoft.Extensions.Resilience" />
+  </ItemGroup>
+  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /></ItemGroup>
+</Project>

@@ -1,0 +1,56 @@
+export const columnTypes = ['string', 'boolean', 'int64', 'decimal', 'double', 'date', 'timestamp'] as const;
+export type ColumnType = typeof columnTypes[number];
+export interface Column { name: string; type: ColumnType; nullable: boolean; precision?: number; scale?: number }
+export interface Mapping { source: string; target: Column; format?: string | null }
+export type ComparisonOperator = 'equal' | 'notEqual' | 'greater' | 'greaterOrEqual' | 'less' | 'lessOrEqual';
+export type Predicate =
+  | { kind: 'compare'; column: string; operator: ComparisonOperator; value: string }
+  | { kind: 'null'; column: string; isNull: boolean }
+  | { kind: 'logical'; operator: 'and' | 'or' | 'not'; children: Predicate[] };
+export type Step =
+  | { type: 'csv'; id: string; path: string; delimiter: string; hasHeader: boolean; schema: Column[] }
+  | { type: 'map'; id: string; mappings: Mapping[] }
+  | { type: 'filter'; id: string; criteria: Predicate }
+  | { type: 'parquet'; id: string; path: string };
+export interface Definition { formatVersion: 1; steps: Step[] }
+export interface PipelineDocument {
+  name: string;
+  definition: Definition;
+  workspace: Record<string, unknown>;
+  environments: Record<string, Record<string, string>>;
+}
+export interface SavedPipeline { id: string; revision: number; document: PipelineDocument }
+export interface PipelineSummary { id: string; name: string; revision: number; environments: string[] }
+export interface PipelineList { pipelines: PipelineSummary[]; page: number; hasMore: boolean }
+export interface Analysis {
+  issues: { blockId: string; message: string }[];
+  schemas: { blockId: string; input: Column[]; output: Column[] }[];
+}
+export interface Run {
+  id: string; pipelineId: string; revision: number; environment: string;
+  status: 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled' | 'Interrupted';
+  rowsRead: number; rowsWritten: number; error: string | null; blockId: string | null;
+  createdAt: string; startedAt: string | null; finishedAt: string | null; trigger: string;
+}
+export interface RunHistory { runs: Run[]; page: number; hasMore: boolean }
+export interface ScheduledPipeline { pipelineId: string; pipelineName: string; environment: string }
+export interface Schedule {
+  id: string; alias: string; cronExpression: string; isEnabled: boolean; revision: number;
+  pipelines: ScheduledPipeline[]; nextRuns: string[];
+}
+export function inferSchemas(definition: Definition): Analysis['schemas'] {
+  let current: Column[] = [];
+  return definition.steps.map(step => {
+    const input = current;
+    if (step.type === 'csv') current = step.schema;
+    if (step.type === 'map') current = step.mappings.map(m => m.target);
+    return { blockId: step.id, input, output: step.type === 'parquet' ? [] : current };
+  });
+}
+
+export function resolvePath(path: string, variables: Record<string, string>): string {
+  return path.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, key: string) => {
+    if (!Object.hasOwn(variables, key)) throw new Error(`Missing environment variable '${key}'.`);
+    return variables[key];
+  });
+}

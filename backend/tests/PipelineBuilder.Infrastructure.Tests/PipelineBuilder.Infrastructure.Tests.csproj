@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../src/PipelineBuilder.Infrastructure/PipelineBuilder.Infrastructure.csproj" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <!-- Test SDK projects do not prune the dashboard's legacy cryptography dependency like the Web SDK does. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../src/PipelineBuilder.Presentation/PipelineBuilder.Presentation.csproj" />
+    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+  </ItemGroup>
+</Project>

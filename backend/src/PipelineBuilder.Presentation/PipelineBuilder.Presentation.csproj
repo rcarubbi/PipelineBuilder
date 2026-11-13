@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup><UserSecretsId>PipelineBuilder-Development</UserSecretsId></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PipelineBuilder.Application/PipelineBuilder.Application.csproj" />
+    <ProjectReference Include="../PipelineBuilder.Infrastructure/PipelineBuilder.Infrastructure.csproj" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Asp.Versioning.Mvc" />
+    <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+  </ItemGroup>
+</Project>
