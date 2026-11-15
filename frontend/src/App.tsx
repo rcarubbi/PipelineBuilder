@@ -1,84 +1,82 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Blockly from 'blockly/core';
 import { BlockEditor, type EditorHandle } from './blockly/BlockEditor';
-import { compileWorkspace, getBlockData, schemaBefore } from './blockly/workspace';
+import { compileEnvironments, compileWorkspace, getBlockData, schemaBefore } from './blockly/workspace';
 import { BlockProperties } from './components/BlockProperties';
-import { EnvironmentEditor, parseEnvironments } from './components/EnvironmentEditor';
 import { IconButton, IconLink } from './components/Icon';
 import { PageHeader } from './components/PageHeader';
+import { ConfirmDialog } from './components/ConfirmDialog';
+import { Loading } from './components/Loading';
 import { api } from './pipeline/api';
-import { inferSchemas, resolvePath, type Analysis, type Definition, type Run } from './pipeline/types';
+import { inferSchemas, type Analysis, type Definition, type Run, type SavedPipeline } from './pipeline/types';
 
-const defaultEnvironments = { development: { INPUT_FILE: 'customers.csv', OUTPUT_FILE: 'customers.parquet' } };
-
-export function App({ pipelineId }: { pipelineId?: string }) {
+export function App({ pipelineId, initialPipeline }: { pipelineId?: string; initialPipeline?: SavedPipeline }) {
   const editor = useRef<EditorHandle>(null);
   const [id] = useState(pipelineId ?? crypto.randomUUID());
-  const [revision, setRevision] = useState(0);
-  const [name, setName] = useState('New pipeline');
-  const [initialWorkspace, setInitialWorkspace] = useState<Record<string, unknown>>();
-  const [loading, setLoading] = useState(!!pipelineId);
-  const [environment, setEnvironment] = useState('development');
-  const [environmentJson, setEnvironmentJson] = useState(JSON.stringify(defaultEnvironments, null, 2));
-  const [environmentError, setEnvironmentError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(initialPipeline?.revision ?? 0);
+  const [name, setName] = useState(initialPipeline?.document.name ?? 'New pipeline');
+  const [initialWorkspace, setInitialWorkspace] = useState<Record<string, unknown> | undefined>(initialPipeline?.document.workspace);
+  const [loading, setLoading] = useState(!!pipelineId && !initialPipeline);
+  const [environment, setEnvironment] = useState(Object.keys(initialPipeline?.document.environments ?? {})[0] ?? 'development');
+  const [environmentNames, setEnvironmentNames] = useState<string[]>(['development']);
+  const [environments, setEnvironments] = useState<Record<string, Record<string, string>>>({});
   const [definition, setDefinition] = useState<Definition | null>(null);
   const [designError, setDesignError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<'canvas' | 'json'>('canvas');
+  const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [changeNumber, setChangeNumber] = useState(0);
-  const [savedAtChange, setSavedAtChange] = useState(-1);
+  const [, setChangeNumber] = useState(0);
+  const savedSignature = useRef<string | null>(null);
+  const allowUnload = useRef(false);
+  const [leaveUrl, setLeaveUrl] = useState<string | null>(null);
+  const [deletingBlock, setDeletingBlock] = useState<string | null>(null);
+  const [runNotice, setRunNotice] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setChangeNumber(n => n + 1);
     setAnalysis(null);
-    try { setDefinition(compileWorkspace(editor.current!.workspace())); setDesignError(''); }
+    try {
+      const workspace = editor.current!.workspace();
+      const currentEnvironments = compileEnvironments(workspace);
+      setEnvironments(currentEnvironments);
+      const names = Object.keys(currentEnvironments);
+      setEnvironmentNames(names); setEnvironment(current => names.includes(current) ? current : names[0]);
+      setDefinition(compileWorkspace(workspace)); setDesignError('');
+    }
     catch (ex) { setDefinition(null); setDesignError((ex as Error).message); }
   }, []);
   const selected = editor.current?.workspace().getBlockById(selectedId ?? '') ?? null;
   const schemas = definition ? (analysis?.schemas ?? inferSchemas(definition)) : [];
   const selectedSchema = schemas.find(s => s.blockId === selectedId) ?? (selected ? {
     input: schemaBefore(selected),
-    output: selected.type === 'pipeline_csv' ? getBlockData(selected).schema ?? []
+    output: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput'].includes(selected.type) ? getBlockData(selected).schema ?? []
       : selected.type === 'pipeline_map' ? (getBlockData(selected).mappings ?? []).map(m => m.target)
-        : selected.type === 'pipeline_parquet' ? [] : schemaBefore(selected),
+        : ['pipeline_parquet', 'pipeline_csvOutput', 'pipeline_excelOutput'].includes(selected.type) ? [] : schemaBefore(selected),
   } : null);
   const active = run?.status === 'Queued' || run?.status === 'Running';
-  const dirty = savedAtChange !== changeNumber;
+  const signature = () => JSON.stringify({ name, workspace: Blockly.serialization.workspaces.save(editor.current!.workspace()) });
+  const dirty = revision === 0 || (!!editor.current && signature() !== savedSignature.current);
 
   useEffect(() => {
-    if (!pipelineId) return;
+    if (!pipelineId || initialPipeline) return;
     let disposed = false;
     api.load(pipelineId).then(result => {
       if (disposed) return;
       setName(result.document.name); setRevision(result.revision);
-      setEnvironmentJson(JSON.stringify(result.document.environments, null, 2));
       setEnvironment(Object.keys(result.document.environments)[0]);
       setInitialWorkspace(result.document.workspace);
     }).catch(ex => { if (!disposed) setError(ex instanceof Error ? ex.message : 'Could not load pipeline.'); })
       .finally(() => { if (!disposed) setLoading(false); });
     return () => { disposed = true; };
-  }, [pipelineId]);
-
-  function environments(): Record<string, Record<string, string>> {
-    if (environmentError) throw new Error(environmentError);
-    return parseEnvironments(environmentJson);
-  }
-
-  function changeEnvironments(json: string, error: string | null) {
-    setEnvironmentJson(json); setEnvironmentError(error); setChangeNumber(n => n + 1);
-    if (error) return;
-    // Keep the selected environment valid when it is renamed or removed.
-    const names = Object.keys(parseEnvironments(json));
-    if (!names.includes(environment)) setEnvironment(names[0]);
-  }
+  }, [pipelineId, initialPipeline]);
 
   async function perform(action: () => Promise<void>) {
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true); setError(''); setMessage(''); setRunNotice(null);
     try { await action(); }
     catch (ex) { setError(ex instanceof Error ? ex.message : 'Operation failed.'); }
     finally { setBusy(false); }
@@ -86,8 +84,12 @@ export function App({ pipelineId }: { pipelineId?: string }) {
 
   async function save() {
     const workspace = editor.current!.workspace();
-    const result = await api.save(id, revision, { name, definition: compileWorkspace(workspace), workspace: Blockly.serialization.workspaces.save(workspace), environments: environments() });
-    setRevision(result.revision); setSavedAtChange(changeNumber);
+    const workspaceState = Blockly.serialization.workspaces.save(workspace);
+    const currentSignature = JSON.stringify({ name, workspace: workspaceState });
+    if (revision > 0 && currentSignature === savedSignature.current) return { id, revision };
+    const result = await api.save(id, revision, { name, definition: compileWorkspace(workspace), workspace: workspaceState, environments: compileEnvironments(workspace) });
+    savedSignature.current = currentSignature;
+    setRevision(result.revision); setChangeNumber(n => n + 1);
     history.replaceState(null, '', `?page=designer&pipeline=${id}`);
     setMessage(`Saved revision ${result.revision}.`);
     return result;
@@ -102,9 +104,9 @@ export function App({ pipelineId }: { pipelineId?: string }) {
 
   async function discover() {
     if (!selected || selected.type !== 'pipeline_csv') return;
-    const variables = environments()[environment];
-    if (!variables) throw new Error('Select an existing environment.');
-    const result = await api.discover(resolvePath(selected.getFieldValue('PATH'), variables), selected.getFieldValue('DELIMITER'), selected.getFieldValue('HEADER') === 'TRUE');
+    const path = selected.getInputTargetBlock('PATH');
+    if (!path || path.type !== 'value_literal') throw new Error('Schema discovery currently requires a literal CSV path.');
+    const result = await api.discover(path.getFieldValue('VALUE'), selected.getFieldValue('DELIMITER'), selected.getFieldValue('HEADER') === 'TRUE');
     selected.data = JSON.stringify({ schema: result.schema }); refresh();
     setMessage(`Sampled up to ${result.sampleLimit} records. Review and save the proposed schema.`);
   }
@@ -153,18 +155,27 @@ export function App({ pipelineId }: { pipelineId?: string }) {
   }, [run?.id, active]);
 
   useEffect(() => {
-    const listener = (event: BeforeUnloadEvent) => { if (dirty && !loading && (!pipelineId || initialWorkspace)) event.preventDefault(); };
+    const listener = (event: BeforeUnloadEvent) => { if (!allowUnload.current && dirty && !loading && (!pipelineId || initialWorkspace)) event.preventDefault(); };
     window.addEventListener('beforeunload', listener);
     return () => window.removeEventListener('beforeunload', listener);
   }, [dirty, loading, pipelineId, initialWorkspace]);
 
-  let environmentNames: string[] = [];
-  try { environmentNames = Object.keys(environments()); } catch { /* Keep invalid JSON editable. */ }
+  useEffect(() => {
+    const listener = (event: MouseEvent) => {
+      if (!dirty || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as Element).closest('a[href]') as HTMLAnchorElement | null;
+      if (!anchor || anchor.target && anchor.target !== '_self' || anchor.hasAttribute('download')) return;
+      event.preventDefault();
+      setLeaveUrl(anchor.href);
+    };
+    document.addEventListener('click', listener);
+    return () => document.removeEventListener('click', listener);
+  }, [dirty]);
 
   if (loading || pipelineId && !initialWorkspace) return <>
     <PageHeader page="Designer" />
     <main><IconLink icon="list" label="Back to pipelines" href="/" />
-      {loading ? <p role="status">Loading pipeline…</p> : <p role="alert" className="notice error">{error}</p>}
+      {loading ? <Loading label="Loading pipeline…" /> : <p role="alert" className="notice error">{error}</p>}
     </main>
   </>;
 
@@ -182,7 +193,7 @@ export function App({ pipelineId }: { pipelineId?: string }) {
           <IconButton icon="play" label="Save & run" className="primary" disabled={busy || active || !definition} onClick={() => void perform(async () => {
             const saved = await save();
             const started = await api.run(saved.id, saved.revision, environment);
-            setRun(started); setMessage(`Run ${started.id} queued. Results are available in execution logs.`);
+            setRun(started); setMessage(''); setRunNotice(started.id);
           })} />
         </div>
         <span className="muted">Revision {revision} · {dirty ? 'unsaved changes' : 'saved'}</span>
@@ -190,24 +201,29 @@ export function App({ pipelineId }: { pipelineId?: string }) {
       {error && <div role="alert" className="notice error">{error}</div>}
       {designError && <div role="status" className="notice">{designError}</div>}
       {message && <div role="status" className="notice">{message}</div>}
-      <div className="designer">
+      {runNotice && <div role="status" className="notice">Run {runNotice} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(id)}`}>execution logs</a>.</div>}
+      <div className={`designer${propertiesOpen ? '' : ' properties-collapsed'}`}>
         <section className="workspace">
           <div className="view-switch" role="tablist" aria-label="Designer view">
             <IconButton icon="blocks" label="Canvas" role="tab" aria-selected={view === 'canvas'} aria-controls="designer-canvas" onClick={() => setView('canvas')} />
-            <IconButton icon="code" label="Executable JSON (read-only)" role="tab" aria-selected={view === 'json'} aria-controls="designer-json" onClick={() => setView('json')} />
-            <span className="muted">{view === 'canvas' ? 'Canvas' : 'Executable JSON · read-only, edit on the canvas'}</span>
+            <IconButton icon="code" label="Pipeline JSON (read-only)" role="tab" aria-selected={view === 'json'} aria-controls="designer-json" onClick={() => setView('json')} />
+            <span className="muted">{view === 'canvas' ? 'Canvas' : 'Pipeline JSON · read-only; contains environment values'}</span>
+            <IconButton icon={propertiesOpen ? 'right' : 'left'} className="properties-toggle"
+              label={propertiesOpen ? 'Collapse properties' : 'Expand properties'} aria-expanded={propertiesOpen}
+              aria-controls="designer-properties" onClick={() => setPropertiesOpen(open => !open)} />
           </div>
           {/* The canvas stays mounted while hidden so Blockly keeps its state. */}
           <div id="designer-canvas" className="canvas-panel" role="tabpanel" aria-label="Canvas" hidden={view !== 'canvas'}>
             <BlockEditor ref={editor} initialWorkspace={initialWorkspace} onChange={refresh} onSelect={setSelectedId}
-              onReady={() => { refresh(); if (pipelineId) setSavedAtChange(changeNumber + 1); }} />
+              onReady={() => { if (pipelineId) savedSignature.current = signature(); refresh(); }} />
           </div>
-          {view === 'json' && <div id="designer-json" className="json-panel" role="tabpanel" aria-label="Executable JSON">
-            <pre className="json-view" tabIndex={0} aria-readonly="true">{definition ? JSON.stringify(definition, null, 2) : `Pipeline is incomplete: ${designError}`}</pre>
+          {view === 'json' && <div id="designer-json" className="json-panel" role="tabpanel" aria-label="Pipeline JSON">
+            <pre className="json-view" tabIndex={0} aria-readonly="true">{definition ? JSON.stringify({ ...definition, environments }, null, 2) : `Pipeline is incomplete: ${designError}`}</pre>
           </div>}
         </section>
-        <aside>
+        <aside id="designer-properties" aria-label="Properties" aria-hidden={!propertiesOpen} inert={!propertiesOpen}>
           {selected ? <>
+            <div className="properties-content">
             <BlockProperties block={selected} inputSchema={selectedSchema?.input ?? []} onChange={refresh} onDiscover={() => void perform(discover)} />
             {selected.type === 'pipeline_filter' && <div className="actions">
               <IconButton icon="and" label="Add AND criterion" onClick={() => extendFilter('and')} /><IconButton icon="or" label="Add OR criterion" onClick={() => extendFilter('or')} />
@@ -215,9 +231,10 @@ export function App({ pipelineId }: { pipelineId?: string }) {
             </div>}
             {['pipeline_map', 'pipeline_filter'].includes(selected.type) && <div className="actions">
               <IconButton icon="up" label="Move step up" onClick={() => moveSelected(-1)} /><IconButton icon="down" label="Move step down" onClick={() => moveSelected(1)} />
-              <IconButton icon="trash" label="Remove step" onClick={() => { selected.dispose(true); setSelectedId(null); refresh(); }} />
+              <IconButton icon="trash" label="Remove step" onClick={() => setDeletingBlock(selected.id)} />
             </div>}
-            {selectedSchema && <section><h2>Inferred schemas</h2>{(['input', 'output'] as const).map(side => <div key={side}>
+            </div>
+            {selectedSchema && <section className="inferred-schemas" aria-label="Inferred schemas"><h2>Inferred schemas</h2>{(['input', 'output'] as const).map(side => <div key={side}>
               <h3>{side}</h3><ul>{selectedSchema[side].map(c => <li key={c.name}><code>{c.name}</code>: {c.type}{c.nullable ? ' (nullable)' : ''}</li>)}</ul>
               {selectedSchema[side].length === 0 && <p className="muted">None</p>}
             </div>)}</section>}
@@ -225,7 +242,8 @@ export function App({ pipelineId }: { pipelineId?: string }) {
         </aside>
       </div>
       {analysis && analysis.issues.length > 0 && <section aria-label="Validation issues"><h2>Validation issues</h2><ul>{analysis.issues.map((issue, index) => <li key={index}><button onClick={() => { const block = editor.current!.workspace().getBlockById(issue.blockId); block?.select(); setSelectedId(issue.blockId); }}>{issue.message}</button></li>)}</ul></section>}
-      <EnvironmentEditor json={environmentJson} onChange={changeEnvironments} />
+      {leaveUrl && <ConfirmDialog title="Leave designer?" description="Your unsaved changes will be lost." confirmLabel="Leave without saving" onCancel={() => setLeaveUrl(null)} onConfirm={() => { allowUnload.current = true; window.location.assign(leaveUrl); }} />}
+      {deletingBlock && <ConfirmDialog title="Remove step?" description="This step will be removed from the pipeline." confirmLabel="Remove step" onCancel={() => setDeletingBlock(null)} onConfirm={() => { editor.current?.workspace().getBlockById(deletingBlock)?.dispose(true); setDeletingBlock(null); setSelectedId(null); refresh(); }} />}
     </main>
   </>;
 }

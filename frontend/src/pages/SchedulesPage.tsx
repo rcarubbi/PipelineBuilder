@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { IconButton, IconLink } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Loading } from '../components/Loading';
 import { api } from '../pipeline/api';
 import type { Schedule, ScheduledPipeline } from '../pipeline/types';
 import {
@@ -21,6 +23,7 @@ export function SchedulesPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [deleting, setDeleting] = useState<Schedule | null>(null);
   const [draft, setDraft] = useState<Draft>(newDraft);
   const [preview, setPreview] = useState<{ runs: string[]; error: string }>({ runs: [], error: '' });
 
@@ -78,7 +81,6 @@ export function SchedulesPage() {
   }
 
   const remove = (schedule: Schedule) => {
-    if (!window.confirm(`Delete schedule "${schedule.alias}"?`)) return;
     void perform(async () => { await api.deleteSchedule(schedule.id, schedule.revision); if (draft.id === schedule.id) setDraft(newDraft()); return `Deleted schedule ${schedule.alias}.`; });
   };
 
@@ -95,7 +97,7 @@ export function SchedulesPage() {
     <main>
       <section className="toolbar" aria-label="Schedule actions">
         <IconLink icon="list" label="Back to pipelines" href="/" />
-        <IconButton icon="refresh" label="Refresh schedules" disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
+        <IconButton icon="refresh" label="Refresh schedules" loading={loading} disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
         <p className="muted">Schedules run in UTC. Attach pipelines from the pipeline list. Runs missed while the server is offline are skipped.</p>
       </section>
       {message && <p role="status" className="notice">{message}</p>}
@@ -140,7 +142,7 @@ export function SchedulesPage() {
           </div>
         </section>
         <section aria-label="Schedules">
-          {loading && !schedules && <p role="status">Loading schedules…</p>}
+          {loading && <Loading label="Loading schedules…" />}
           {schedules?.length === 0 && <p>No schedules yet. Create one with the editor.</p>}
           {!!schedules?.length && <div className="history-table"><table>
             <caption>Schedules</caption>
@@ -157,12 +159,13 @@ export function SchedulesPage() {
               <td><div className="actions">
                 <IconButton icon="edit" label={`Edit ${schedule.alias}`} disabled={busy} onClick={() => edit(schedule)} />
                 <IconButton icon="trash" label={`Delete ${schedule.alias}`} className="danger" disabled={busy || schedule.pipelines.length > 0}
-                  title={schedule.pipelines.length > 0 ? 'Remove attached pipelines before deleting' : undefined} onClick={() => remove(schedule)} />
+                  title={schedule.pipelines.length > 0 ? 'Remove attached pipelines before deleting' : undefined} onClick={() => setDeleting(schedule)} />
               </div></td>
             </tr>)}</tbody>
           </table></div>}
         </section>
       </div>
+      {deleting && <ConfirmDialog title={`Delete schedule ${deleting.alias}?`} description="This schedule will be permanently removed." confirmLabel="Delete schedule" onCancel={() => setDeleting(null)} onConfirm={() => { const schedule = deleting; setDeleting(null); remove(schedule); }} />}
     </main>
   </>;
 }

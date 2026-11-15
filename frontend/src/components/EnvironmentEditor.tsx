@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IconButton } from './Icon';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export type Environments = Record<string, Record<string, string>>;
 interface VariableRow { id: number; name: string; value: string }
@@ -55,6 +56,7 @@ export function EnvironmentEditor({ json, onChange }: Props) {
   const [rows, setRows] = useState<EnvironmentRow[]>(initial ?? []);
   const [notice, setNotice] = useState('');
   const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState<EnvironmentRow | null>(null);
   const formError = advanced ? null : validateRows(rows);
   const jsonError = advanced ? (() => { try { parseEnvironments(json); return null; } catch (ex) { return (ex as Error).message; } })() : null;
 
@@ -90,7 +92,7 @@ export function EnvironmentEditor({ json, onChange }: Props) {
     <div className="environment-header">
       <label className="inline"><input type="checkbox" checked={advanced} disabled={!advanced && !!formError} onChange={e => switchMode(e.target.checked)} />Edit as JSON (advanced)</label>
     </div>
-    <p className="muted">Use variables in file paths as <code>{'${NAME}'}</code>. Relative paths start inside the configured server input/output directories.</p>
+    <p className="muted">Use an environment variable value block named <code>CURRENT_ENVIRONMENT</code> for the selected environment name. It overrides any configured variable with that name. In legacy file paths, use <code>{'${CURRENT_ENVIRONMENT}'}</code>. Relative paths start inside the configured server input/output directories.</p>
     {notice && <p role="alert" className="field-error">{notice}</p>}
     {advanced ? <>
       <label>Variables by environment (JSON)<textarea rows={9} spellCheck={false} value={json} onChange={e => {
@@ -107,7 +109,7 @@ export function EnvironmentEditor({ json, onChange }: Props) {
           <div className="actions">
             <label>Environment name<input value={environment.name} onChange={e => updateEnvironment(environment.id, current => ({ ...current, name: e.target.value }))} /></label>
             <IconButton icon="trash" label={`Remove environment ${label}`} className="danger" disabled={rows.length === 1}
-              onClick={() => { if (window.confirm(`Remove environment "${label}" and its variables?`)) update(rows.filter(e => e.id !== environment.id)); }} />
+              onClick={() => setDeleting(environment)} />
           </div>
           {environment.variables.length === 0 ? <p className="muted">No variables.</p> : <table className="variable-table">
             <thead><tr><th scope="col">Variable</th><th scope="col">Value</th><th scope="col"><span className="visually-hidden">Actions</span></th></tr></thead>
@@ -127,5 +129,6 @@ export function EnvironmentEditor({ json, onChange }: Props) {
       {formError && <p role="alert" className="field-error">{formError}</p>}
       <IconButton icon="add" label="Add environment" onClick={addEnvironment} />
     </>}
+    {deleting && <ConfirmDialog title={`Remove environment ${deleting.name}?`} description="Its variables will also be removed." confirmLabel="Remove environment" onCancel={() => setDeleting(null)} onConfirm={() => { update(rows.filter(row => row.id !== deleting.id)); setDeleting(null); }} />}
   </details>;
 }

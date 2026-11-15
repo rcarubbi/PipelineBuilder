@@ -21,6 +21,16 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it('keeps schedules visible beneath the loading overlay during refresh', async () => {
+  render(<SchedulesPage />);
+  await screen.findByRole('table', { name: 'Schedules' });
+  vi.mocked(api.schedules).mockReturnValueOnce(new Promise(() => {}));
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh schedules' }));
+  expect(screen.getByRole('table', { name: 'Schedules' })).toBeInTheDocument();
+  expect(screen.getByText('Loading schedules…').closest('.loading-overlay')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Refresh schedules' })).toHaveAttribute('aria-busy', 'true');
+});
+
 it('lists schedules with plain-language timing, cron, next runs and attached pipelines', async () => {
   render(<SchedulesPage />);
   const header = within(screen.getByRole('banner'));

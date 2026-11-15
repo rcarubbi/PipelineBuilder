@@ -19,6 +19,16 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it('keeps pipelines visible beneath the loading overlay during refresh', async () => {
+  render(<PipelinesPage />);
+  await screen.findByText('Customers');
+  vi.mocked(api.pipelines).mockReturnValueOnce(new Promise(() => {}));
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh pipelines' }));
+  expect(screen.getByText('Customers')).toBeInTheDocument();
+  expect(screen.getByText('Loading pipelines…').closest('.loading-overlay')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Refresh pipelines' })).toHaveAttribute('aria-busy', 'true');
+});
+
 it('lists pipelines with accessible icon actions and navigation hints', async () => {
   render(<PipelinesPage />);
   expect(await screen.findByText('Customers')).toBeInTheDocument();
@@ -45,36 +55,40 @@ it('runs the saved revision in the environment selected by the user', async () =
   await user.click(screen.getByRole('button', { name: 'Run Customers' }));
 
   expect(api.run).toHaveBeenCalledWith('pipeline-1', 3, 'test');
-  expect(await screen.findByText(/Run run-1 queued for Customers/)).toBeInTheDocument();
+  expect(await screen.findByRole('link', { name: 'execution logs' })).toHaveAttribute('href', '?page=logs&pipeline=pipeline-1');
 });
 
 it('requires confirmation before deleting and refreshes the list afterward', async () => {
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.setAttribute('open', ''); } });
   vi.mocked(api.deletePipeline).mockResolvedValue({ deleted: true });
   const user = userEvent.setup();
   render(<PipelinesPage />);
   await screen.findByText('Customers');
   await user.click(screen.getByRole('button', { name: 'Delete Customers' }));
+  expect(screen.getByText('Execution history and generated files will be kept.')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(api.deletePipeline).not.toHaveBeenCalled();
 
   vi.mocked(api.pipelines).mockResolvedValue({ page: 1, hasMore: false, pipelines: [] });
   await user.click(screen.getByRole('button', { name: 'Delete Customers' }));
-
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Execution history and generated files will be kept'));
+  await user.click(screen.getByRole('button', { name: 'Delete pipeline' }));
   expect(api.deletePipeline).toHaveBeenCalledWith('pipeline-1', 3);
   expect(await screen.findByText(/No pipelines yet/)).toBeInTheDocument();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
 });
 
 it('keeps a pipeline visible when deletion is rejected', async () => {
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.setAttribute('open', ''); } });
   vi.mocked(api.deletePipeline).mockRejectedValue(new Error('Pipeline has active runs.'));
   render(<PipelinesPage />);
   await screen.findByText('Customers');
 
   await userEvent.setup().click(screen.getByRole('button', { name: 'Delete Customers' }));
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Delete pipeline' }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Pipeline has active runs.');
   expect(screen.getByText('Customers')).toBeInTheDocument();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
 });
 
 it('handles an empty list without hiding the create action', async () => {

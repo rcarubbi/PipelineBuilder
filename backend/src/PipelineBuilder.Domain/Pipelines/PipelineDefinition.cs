@@ -5,9 +5,13 @@ public sealed record Column(string Name, ColumnType Type, bool Nullable = false,
 public sealed record ColumnMapping(string Source, Column Target, string? Format = null);
 public abstract record PipelineStep(string Id);
 public sealed record CsvStep(string Id, string Path, Column[] Schema, string Delimiter = ",", bool HasHeader = true) : PipelineStep(Id);
+public sealed record ParquetInputStep(string Id, string Path, Column[] Schema) : PipelineStep(Id);
+public sealed record ExcelInputStep(string Id, string Path, Column[] Schema, string Sheet, bool HasHeader = true) : PipelineStep(Id);
 public sealed record MapStep(string Id, ColumnMapping[] Mappings) : PipelineStep(Id);
 public sealed record FilterStep(string Id, IRowPredicate Criteria) : PipelineStep(Id);
 public sealed record ParquetStep(string Id, string Path) : PipelineStep(Id);
+public sealed record CsvOutputStep(string Id, string Path, string Delimiter = ",", bool HasHeader = true) : PipelineStep(Id);
+public sealed record ExcelOutputStep(string Id, string Path, string Sheet, bool HasHeader = true) : PipelineStep(Id);
 public sealed record PipelineDefinition(int FormatVersion, PipelineStep[] Steps);
 public sealed record PipelineIssue(string BlockId, string Message);
 public sealed record StepSchema(string BlockId, Column[] Input, Column[] Output);
@@ -21,8 +25,8 @@ public static class PipelineValidation
         List<StepSchema> schemas = [];
         if (definition.FormatVersion != 1) issues.Add(new("", "Unsupported definition format version."));
         if (definition.Steps.Length is < 2 or > 100) issues.Add(new("", "A pipeline needs 2 to 100 steps."));
-        if (definition.Steps.FirstOrDefault() is not CsvStep || definition.Steps.LastOrDefault() is not ParquetStep)
-            issues.Add(new("", "Connect one CSV input to one final Parquet output."));
+        if (definition.Steps.FirstOrDefault() is not (CsvStep or ParquetInputStep or ExcelInputStep) || definition.Steps.LastOrDefault() is not (ParquetStep or CsvOutputStep or ExcelOutputStep))
+            issues.Add(new("", "Connect one input to one final output."));
         HashSet<string> ids = [];
         Column[] current = [];
         for (var index = 0; index < definition.Steps.Length; index++)
@@ -50,6 +54,22 @@ public static class PipelineValidation
                     if (index != definition.Steps.Length - 1) issues.Add(new(step.Id, "Parquet output must be last and unique."));
                     if (string.IsNullOrWhiteSpace(parquet.Path)) issues.Add(new(step.Id, "Output path is required."));
                     break;
+                case ParquetInputStep parquetInput:
+                    if (index != 0 || string.IsNullOrWhiteSpace(parquetInput.Path)) issues.Add(new(step.Id, "Parquet input must be first and have a path."));
+                    current = parquetInput.Schema;
+                    break;
+                case ExcelInputStep excelInput:
+                    if (index != 0 || string.IsNullOrWhiteSpace(excelInput.Path) || string.IsNullOrWhiteSpace(excelInput.Sheet)) issues.Add(new(step.Id, "Excel input must be first and have a path and sheet name."));
+                    current = excelInput.Schema;
+                    break;
+                case CsvOutputStep csvOutput:
+                    if (index != definition.Steps.Length - 1) issues.Add(new(step.Id, "CSV output must be last and unique."));
+                    if (string.IsNullOrWhiteSpace(csvOutput.Path)) issues.Add(new(step.Id, "Output path is required."));
+                    if (csvOutput.Delimiter.Length != 1 || csvOutput.Delimiter is "\r" or "\n" or "\"") issues.Add(new(step.Id, "Choose one valid delimiter character."));
+                    break;
+                case ExcelOutputStep excelOutput:
+                    if (index != definition.Steps.Length - 1 || string.IsNullOrWhiteSpace(excelOutput.Path) || string.IsNullOrWhiteSpace(excelOutput.Sheet)) issues.Add(new(step.Id, "Excel output must be last and have a path and sheet name."));
+                    break;
                 default:
                     issues.Add(new(step.Id, "Unsupported block."));
                     break;
@@ -63,7 +83,7 @@ public static class PipelineValidation
                 if (column.Type == ColumnType.Decimal && (column.Precision is < 1 or > 28 || column.Scale < 0 || column.Scale > column.Precision))
                     issues.Add(new(step.Id, "Decimal precision must be 1–28; scale must be between zero and precision."));
             }
-            schemas.Add(new(step.Id, input, step is ParquetStep ? [] : current));
+            schemas.Add(new(step.Id, input, step is ParquetStep or CsvOutputStep or ExcelOutputStep ? [] : current));
         }
         return new(issues.ToArray(), schemas.ToArray());
     }

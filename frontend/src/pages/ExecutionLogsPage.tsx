@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../pipeline/api';
 import { IconButton, IconLink } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
+import { Loading } from '../components/Loading';
 import type { Run, RunHistory } from '../pipeline/types';
 
 function RunResult({ run }: { run: Run }) {
@@ -39,13 +40,13 @@ export function ExecutionLogsPage() {
     <main>
       <section className="toolbar" aria-label="History actions">
         <IconLink icon="list" label="Back to pipelines" href="/" />
-        <IconButton icon="refresh" label="Refresh history" disabled={loading} onClick={() => setRefresh(n => n + 1)} />
+        <IconButton icon="refresh" label="Refresh history" loading={loading} disabled={loading} onClick={() => setRefresh(n => n + 1)} />
         <p className="muted">Results are saved on the server. Refresh to see updates to queued or running executions.</p>
       </section>
       {pipelineId && <p>Pipeline: <code>{pipelineId}</code></p>}
-      {loading && <p role="status">Loading execution history…</p>}
+      {loading && <Loading label="Loading execution history…" />}
       {error && <p role="alert" className="notice error">{error}</p>}
-      {!loading && !error && history && <>
+      {history && <>
         {history.runs.length === 0 ? <p role="status">No executions on this page.</p> : <div className="history-table">
           <table>
             <caption>Pipeline executions — page {history.page}</caption>

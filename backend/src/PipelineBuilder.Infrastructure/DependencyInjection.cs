@@ -23,6 +23,7 @@ public static class DependencyInjection
         // TickerQ 2.x's generated module initializers overwrite registrations from other assemblies.
         TickerQInstanceFactory.Initialize();
         services.AddOptions<PipelineFileOptions>().BindConfiguration("Files").ValidateDataAnnotations().ValidateOnStart();
+        services.AddOptions<PipelineWorkerOptions>().BindConfiguration("PipelineWorker").ValidateDataAnnotations().ValidateOnStart();
         services.AddSingleton<ServerPaths>();
         services.AddScoped<IPipelineFiles, PipelineFiles>();
         services.AddDbContext<PipelineDbContext>(options => options.UseNpgsql(configuration.GetConnectionString("Pipelines")

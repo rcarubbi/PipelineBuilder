@@ -14,6 +14,17 @@ const run: Run = {
 
 beforeEach(() => { vi.mocked(api.history).mockReset(); history.replaceState(null, '', '/'); });
 
+it('keeps execution history visible beneath the loading overlay during refresh', async () => {
+  vi.mocked(api.history).mockResolvedValueOnce({ page: 1, hasMore: false, runs: [run] });
+  render(<ExecutionLogsPage />);
+  await screen.findByText('OK');
+  vi.mocked(api.history).mockReturnValueOnce(new Promise(() => {}));
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh history' }));
+  expect(screen.getByText('OK')).toBeInTheDocument();
+  expect(screen.getByText('Loading execution history…').closest('.loading-overlay')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Refresh history' })).toHaveAttribute('aria-busy', 'true');
+});
+
 it('shows OK and its summary in green, and Failure and its reason in red', async () => {
   vi.mocked(api.history).mockResolvedValue({ page: 1, hasMore: false, runs: [run,
     { ...run, id: 'run-2', status: 'Failed', error: 'Record 4 has an invalid age.', blockId: 'csv' },

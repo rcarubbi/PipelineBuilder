@@ -4,15 +4,24 @@ export interface Column { name: string; type: ColumnType; nullable: boolean; pre
 export interface Mapping { source: string; target: Column; format?: string | null }
 export type ComparisonOperator = 'equal' | 'notEqual' | 'greater' | 'greaterOrEqual' | 'less' | 'lessOrEqual';
 export type Predicate =
-  | { kind: 'compare'; column: string; operator: ComparisonOperator; value: string }
+  | { kind: 'compare'; column: string; operator: ComparisonOperator; value: string; columnExpression?: TextExpression; valueExpression?: TextExpression }
   | { kind: 'null'; column: string; isNull: boolean }
   | { kind: 'logical'; operator: 'and' | 'or' | 'not'; children: Predicate[] };
+export type TextExpression =
+  | { kind: 'literal'; id: string; value: string }
+  | { kind: 'concat'; id: string; left: TextExpression; right: TextExpression }
+  | { kind: 'variable' | 'environment'; id: string; name: string }
+  | { kind: 'utc'; id: string; format: string; formatExpression?: TextExpression };
 export type Step =
-  | { type: 'csv'; id: string; path: string; delimiter: string; hasHeader: boolean; schema: Column[] }
+  | { type: 'csv'; id: string; path: string; pathExpression?: TextExpression; delimiter: string; hasHeader: boolean; schema: Column[] }
+  | { type: 'parquetInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[] }
+  | { type: 'excelInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[]; sheet: string; hasHeader: boolean }
   | { type: 'map'; id: string; mappings: Mapping[] }
   | { type: 'filter'; id: string; criteria: Predicate }
-  | { type: 'parquet'; id: string; path: string };
-export interface Definition { formatVersion: 1; steps: Step[] }
+  | { type: 'parquet'; id: string; path: string; pathExpression?: TextExpression }
+  | { type: 'csvOutput'; id: string; path: string; pathExpression?: TextExpression; delimiter: string; hasHeader: boolean }
+  | { type: 'excelOutput'; id: string; path: string; pathExpression?: TextExpression; sheet: string; hasHeader: boolean };
+export interface Definition { formatVersion: 1; steps: Step[]; variables?: { name: string; value: TextExpression }[] }
 export interface PipelineDocument {
   name: string;
   definition: Definition;
@@ -42,9 +51,9 @@ export function inferSchemas(definition: Definition): Analysis['schemas'] {
   let current: Column[] = [];
   return definition.steps.map(step => {
     const input = current;
-    if (step.type === 'csv') current = step.schema;
+    if (step.type === 'csv' || step.type === 'parquetInput' || step.type === 'excelInput') current = step.schema;
     if (step.type === 'map') current = step.mappings.map(m => m.target);
-    return { blockId: step.id, input, output: step.type === 'parquet' ? [] : current };
+    return { blockId: step.id, input, output: step.type === 'parquet' || step.type === 'csvOutput' || step.type === 'excelOutput' ? [] : current };
   });
 }
 

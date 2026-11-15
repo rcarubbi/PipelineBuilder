@@ -44,48 +44,44 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
         var pipeline = definition.MapTo();
         var analysis = PipelineValidation.Analyze(pipeline);
         if (analysis.Issues.Length > 0) throw new PipelineDataException("Run snapshot has an invalid definition.");
-        var input = (CsvStep)pipeline.Steps[0];
-        var output = (ParquetStep)pipeline.Steps[^1];
+        var input = pipeline.Steps[0];
+        var inputPathExpression = input switch { CsvStep csv => csv.Path, ParquetInputStep parquet => parquet.Path, ExcelInputStep excel => excel.Path, _ => throw new PipelineDataException("Unsupported input.") };
+        var output = pipeline.Steps[^1];
+        var outputPathExpression = output switch { ParquetStep parquet => parquet.Path, CsvOutputStep csv => csv.Path, ExcelOutputStep excel => excel.Path, _ => throw new PipelineDataException("Unsupported output.") };
         string? temporary = null;
         var activeBlock = input.Id;
         try
         {
-            var inputPath = paths.Input(input.Path);
+            var inputPath = paths.Input(inputPathExpression);
             string outputPath;
-            try { outputPath = paths.Output(output.Path); }
+            try { outputPath = paths.Output(outputPathExpression); }
             catch (PipelineDataException ex) { throw new PipelineDataException(ex.Message, output.Id, ex); }
             temporary = outputPath + $".{Guid.NewGuid():N}.tmp";
             var outputSchema = analysis.Schemas[^1].Input;
             long read = 0, written = 0;
-            using (var reader = new StreamReader(inputPath, new UTF8Encoding(false, true)))
-            using (var csv = new CsvReader(reader, Configuration(input.Delimiter, input.HasHeader)))
             await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
             {
-                var parquetSchema = new ParquetSchema(outputSchema.Select(ParquetBatchWriter.CreateField));
-                await using var writer = await ParquetWriter.CreateAsync(parquetSchema, stream, cancellationToken: ct);
-                if (input.HasHeader)
+                var parquetSchema = output is ParquetStep ? new ParquetSchema(outputSchema.Select(ParquetBatchWriter.CreateField)) : null;
+                await using var writer = parquetSchema is null ? null : await ParquetWriter.CreateAsync(parquetSchema, stream, cancellationToken: ct);
+                using var textWriter = output is CsvOutputStep ? new StreamWriter(stream, new UTF8Encoding(false), 65536, leaveOpen: true) : null;
+                using var csvOutput = output is CsvOutputStep csvStep ? new CsvWriter(textWriter!, Configuration(csvStep.Delimiter, csvStep.HasHeader)) : null;
+                await using var excelWriter = output is ExcelOutputStep excelOutput
+                    ? new ExcelOutputWriter(stream, outputPath, excelOutput.Sheet, output.Id) : null;
+                if (output is ExcelOutputStep { HasHeader: true })
+                    excelWriter!.Write(outputSchema.Select(column => (object?)column.Name));
+                if (output is CsvOutputStep { HasHeader: true })
                 {
-                    if (!await csv.ReadAsync()) throw new PipelineDataException("CSV header is missing.", input.Id);
-                    var names = ReadHeader(csv);
-                    if (names.Length != input.Schema.Length || names.Distinct(StringComparer.Ordinal).Count() != names.Length ||
-                        !input.Schema.All(column => names.Contains(column.Name, StringComparer.Ordinal)))
-                        throw new PipelineDataException("CSV header does not match the confirmed schema.", input.Id);
+                    foreach (var column in outputSchema) csvOutput!.WriteField(column.Name);
+                    await csvOutput!.NextRecordAsync();
                 }
                 List<Dictionary<string, object?>> batch = [];
-                while (await csv.ReadAsync())
+                await foreach (var inputRow in PipelineInputReader.Read(input, inputPath, ct))
                 {
                     ct.ThrowIfCancellationRequested();
                     activeBlock = input.Id;
                     if (read % BatchSize == 0 && await isCancelled(ct)) throw new OperationCanceledException("Run cancelled.");
                     read++;
-                    if (csv.Parser.Count != input.Schema.Length) throw new PipelineDataException($"CSV record {read} has an unexpected number of fields.", input.Id);
-                    var row = new Dictionary<string, object?>(StringComparer.Ordinal);
-                    for (var i = 0; i < input.Schema.Length; i++)
-                    {
-                        var column = input.Schema[i];
-                        var text = input.HasHeader ? csv.GetField(column.Name) : csv.GetField(i);
-                        row[column.Name] = ConvertValue(text, column, null, read, input.Id);
-                    }
+                    var row = inputRow;
                     var keep = true;
                     for (var i = 1; i < pipeline.Steps.Length - 1; i++)
                     {
@@ -101,20 +97,36 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
                         }
                         if (!keep) break;
                     }
-                    if (keep) { batch.Add(row); written++; }
+                    if (keep)
+                    {
+                        if (csvOutput is not null)
+                        {
+                            activeBlock = output.Id;
+                            foreach (var column in outputSchema) csvOutput.WriteField(ValueConversion.Format(row[column.Name]));
+                            await csvOutput.NextRecordAsync();
+                        }
+                        else if (excelWriter is not null)
+                        {
+                            activeBlock = output.Id;
+                            excelWriter.Write(outputSchema.Select(column => row[column.Name]));
+                        }
+                        else batch.Add(row);
+                        written++;
+                    }
                     if (batch.Count == BatchSize)
                     {
                         activeBlock = output.Id;
-                        await ParquetBatchWriter.Write(writer, parquetSchema, outputSchema, batch, ct);
+                        await ParquetBatchWriter.Write(writer!, parquetSchema!, outputSchema, batch, ct);
                         batch.Clear();
                     }
                 }
                 activeBlock = output.Id;
-                if (batch.Count > 0 || written == 0) await ParquetBatchWriter.Write(writer, parquetSchema, outputSchema, batch, ct);
+                if (writer is not null && (batch.Count > 0 || written == 0)) await ParquetBatchWriter.Write(writer, parquetSchema!, outputSchema, batch, ct);
+                if (excelWriter is not null) await excelWriter.Complete(ct);
             }
             ct.ThrowIfCancellationRequested();
             if (await isCancelled(ct)) throw new OperationCanceledException("Run cancelled.");
-            paths.Output(output.Path);
+            paths.Output(outputPathExpression);
             File.Move(temporary, outputPath, overwrite: false);
             temporary = null;
             return new(read, written);
@@ -127,13 +139,17 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
         {
             throw new PipelineDataException("File processing failed. Check access, CSV structure and whether the output already exists.", activeBlock, ex);
         }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FormatException or OverflowException)
+        {
+            throw new PipelineDataException("File processing failed. Check the file format, schema, sheet name and supported value types.", activeBlock, ex);
+        }
         finally
         {
             if (temporary is not null && File.Exists(temporary)) File.Delete(temporary);
         }
     }
 
-    private static object? ConvertValue(string? text, Column column, string? format, long row, string blockId)
+    internal static object? ConvertValue(string? text, Column column, string? format, long row, string blockId)
     {
         try { return ValueConversion.Convert(text, column, format); }
         catch (Exception ex) when (ex is FormatException or OverflowException)

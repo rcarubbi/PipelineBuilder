@@ -1,5 +1,5 @@
 import * as Blockly from 'blockly/core';
-import { compileWorkspace, seedWorkspace } from '../blockly/workspace';
+import { compileEnvironments, compileWorkspace, seedWorkspace } from '../blockly/workspace';
 import type { SavedPipeline } from './types';
 import { downloadPipeline, parseImport } from './exchange';
 
@@ -35,6 +35,54 @@ it('exports and restores the saved document without installation-specific fields
   expect(exported).not.toHaveProperty('revision');
   expect(click).toHaveBeenCalledOnce();
   expect(parseImport(await blob.text(), 'Customers.json')).toEqual(saved.document);
+});
+
+it('exports Blockly variable assignments and their values', async () => {
+  const workspace = new Blockly.Workspace();
+  seedWorkspace(workspace);
+  const variable = workspace.getVariableMap().createVariable('filename');
+  const assignment = workspace.newBlock('variables_set');
+  assignment.setFieldValue(variable.getId(), 'VAR');
+  const value = workspace.newBlock('value_literal');
+  value.setFieldValue('customers.csv', 'VALUE');
+  assignment.getInput('VALUE')!.connection!.connect(value.outputConnection!);
+  const pipeline: SavedPipeline = { ...saved, document: { ...saved.document,
+    definition: compileWorkspace(workspace), workspace: Blockly.serialization.workspaces.save(workspace) } };
+  workspace.dispose();
+  const createObjectURL = vi.fn().mockReturnValue('blob:export');
+  vi.stubGlobal('URL', Object.assign(class extends URL {}, { createObjectURL, revokeObjectURL: vi.fn() }));
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+  downloadPipeline(pipeline);
+
+  const text = await (createObjectURL.mock.calls[0][0] as Blob).text();
+  const exported = JSON.parse(text);
+  expect(exported.pipeline.definition.variables).toEqual([
+    { name: 'filename', value: { kind: 'literal', id: value.id, value: 'customers.csv' } },
+  ]);
+  expect(parseImport(text, 'pipeline.json').definition.variables).toEqual(exported.pipeline.definition.variables);
+});
+
+it('exports environment definitions created with Blockly environment blocks', async () => {
+  const workspace = new Blockly.Workspace();
+  seedWorkspace(workspace);
+  const block = workspace.newBlock('define_environment');
+  block.setFieldValue('test', 'ENVIRONMENT');
+  block.setFieldValue('INPUT_FILE', 'NAME');
+  block.setFieldValue('test.csv', 'VALUE');
+  const pipeline: SavedPipeline = { ...saved, document: { ...saved.document,
+    definition: compileWorkspace(workspace), workspace: Blockly.serialization.workspaces.save(workspace),
+    environments: compileEnvironments(workspace) } };
+  workspace.dispose();
+  const createObjectURL = vi.fn().mockReturnValue('blob:export');
+  vi.stubGlobal('URL', Object.assign(class extends URL {}, { createObjectURL, revokeObjectURL: vi.fn() }));
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+  downloadPipeline(pipeline);
+
+  const text = await (createObjectURL.mock.calls[0][0] as Blob).text();
+  expect(JSON.parse(text).pipeline.environments).toEqual({ test: { INPUT_FILE: 'test.csv' } });
+  expect(parseImport(text, 'pipeline.json').environments).toEqual({ test: { INPUT_FILE: 'test.csv' } });
 });
 
 it('rebuilds Blockly and default variables from a definition-only file', () => {

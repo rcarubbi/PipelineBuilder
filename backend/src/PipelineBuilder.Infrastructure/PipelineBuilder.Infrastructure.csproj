@@ -3,6 +3,7 @@
     <ProjectReference Include="../PipelineBuilder.Application/PipelineBuilder.Application.csproj" />
     <PackageReference Include="CsvHelper" />
     <PackageReference Include="Parquet.Net" />
+    <PackageReference Include="ExcelReader.NET" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="TickerQ" />
     <PackageReference Include="TickerQ.Dashboard" />

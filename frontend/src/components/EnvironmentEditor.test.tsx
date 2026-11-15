@@ -67,7 +67,7 @@ it.each([
 });
 
 it('requires confirmation and keeps at least one environment', async () => {
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.setAttribute('open', ''); } });
   const onChange = vi.fn();
   const user = userEvent.setup();
   render(<Harness onChange={onChange} />);
@@ -75,9 +75,10 @@ it('requires confirmation and keeps at least one environment', async () => {
 
   await user.click(screen.getByRole('button', { name: 'Add environment' }));
   await user.click(screen.getByRole('button', { name: 'Remove environment development' }));
-
-  expect(confirm).toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: 'Remove environment development?' })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Remove environment' }));
   expect(Object.keys(lastJson(onChange))).toEqual(['environment']);
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
 });
 
 it('switches to the JSON editor and back, keeping changes made in either mode', async () => {

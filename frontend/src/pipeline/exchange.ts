@@ -17,6 +17,8 @@ function normalizeDefinition(value: unknown): Definition {
     if (!isRecord(raw) || typeof raw.id !== 'string') throw new Error('Definition contains an invalid step.');
     if (raw.type === 'csv' && Array.isArray(raw.schema))
       return { ...raw, delimiter: raw.delimiter ?? ',', hasHeader: raw.hasHeader ?? true, schema: raw.schema.map(normalizedColumn) } as Step;
+    if ((raw.type === 'parquetInput' || raw.type === 'excelInput') && Array.isArray(raw.schema))
+      return { ...raw, ...(raw.type === 'excelInput' ? { hasHeader: raw.hasHeader ?? true } : {}), schema: raw.schema.map(normalizedColumn) } as Step;
     if (raw.type === 'map' && Array.isArray(raw.mappings))
       return { ...raw, mappings: raw.mappings.map(mapping => {
         if (!isRecord(mapping)) throw new Error('Definition contains an invalid mapping.');
@@ -24,9 +26,11 @@ function normalizeDefinition(value: unknown): Definition {
       }) } as Step;
     if (raw.type === 'filter' && isRecord(raw.criteria)) return raw as unknown as Step;
     if (raw.type === 'parquet') return raw as unknown as Step;
+    if (raw.type === 'csvOutput') return { ...raw, delimiter: raw.delimiter ?? ',', hasHeader: raw.hasHeader ?? true } as Step;
+    if (raw.type === 'excelOutput') return { ...raw, hasHeader: raw.hasHeader ?? true } as Step;
     throw new Error(`Definition contains an invalid '${String(raw.type)}' step.`);
   });
-  return { formatVersion: 1, steps };
+  return { formatVersion: 1, steps, variables: Array.isArray(value.variables) ? value.variables as Definition['variables'] : [] };
 }
 
 function stable(value: unknown): string {
@@ -53,7 +57,7 @@ function fileNameWithoutExtension(fileName: string): string {
 function referencedVariables(definition: Definition): string[] {
   const variables = new Set<string>();
   for (const step of definition.steps) {
-    if (step.type !== 'csv' && step.type !== 'parquet') continue;
+    if (!('path' in step)) continue;
     for (const match of step.path.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) variables.add(match[1]);
   }
   return [...variables].sort();

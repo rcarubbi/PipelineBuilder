@@ -29,7 +29,7 @@ beforeEach(() => {
   history.replaceState(null, '', '/');
   const workspace = new Blockly.Workspace();
   seedWorkspace(workspace);
-  workspace.getBlockById('csv')!.setFieldValue('saved-customers.csv', 'PATH');
+  workspace.getBlockById('csv')!.getInputTargetBlock('PATH')!.setFieldValue('saved-customers.csv', 'VALUE');
   saved = { id: 'pipeline-1', revision: 4, document: { name: 'Saved export', workspace: Blockly.serialization.workspaces.save(workspace),
     definition: compileWorkspace(workspace), environments: { test: { INPUT_FILE: 'saved-customers.csv', OUTPUT_FILE: 'saved.parquet' } } } };
   workspace.dispose();
@@ -39,6 +39,74 @@ beforeEach(() => {
   vi.mocked(api.getRun).mockReset();
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it('collapses and expands properties without replacing the canvas', async () => {
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  await screen.findByText('Revision 4 · saved');
+  const canvas = screen.getByLabelText('Test block editor');
+  const collapse = screen.getByRole('button', { name: 'Collapse properties' });
+  expect(collapse).toHaveAttribute('aria-expanded', 'true');
+  await user.click(collapse);
+  expect(screen.getByRole('button', { name: 'Expand properties' })).toHaveAttribute('aria-expanded', 'false');
+  expect(document.getElementById('designer-properties')).toHaveAttribute('aria-hidden', 'true');
+  expect(canvas.closest('.designer')).toHaveClass('properties-collapsed');
+  await user.click(screen.getByRole('button', { name: 'Expand properties' }));
+  expect(document.getElementById('designer-properties')).toHaveAttribute('aria-hidden', 'false');
+  expect(screen.getByLabelText('Test block editor')).toBe(canvas);
+});
+
+it('opens a preloaded pipeline without requesting it again', async () => {
+  render(<App pipelineId="pipeline-1" initialPipeline={saved} />);
+  expect(await screen.findByText('Revision 4 · saved')).toBeInTheDocument();
+  expect(screen.getByLabelText('Pipeline name')).toHaveValue('Saved export');
+  expect(api.load).not.toHaveBeenCalled();
+});
+
+it('does not save or increment revision when the saved pipeline is unchanged', async () => {
+  render(<App pipelineId="pipeline-1" />);
+  expect(await screen.findByText('Revision 4 · saved')).toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Save' }));
+  expect(api.save).not.toHaveBeenCalled();
+  expect(screen.getByText('Revision 4 · saved')).toBeInTheDocument();
+});
+
+it('recognizes reverted edits and saves only actual changes', async () => {
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  const name = await screen.findByLabelText('Pipeline name');
+  await user.type(name, 'x');
+  await user.keyboard('{Backspace}');
+  expect(screen.getByText('Revision 4 · saved')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  expect(api.save).not.toHaveBeenCalled();
+  await user.type(name, ' changed');
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  expect(api.save).toHaveBeenCalledWith('pipeline-1', 4, expect.objectContaining({ name: 'Saved export changed' }));
+});
+
+it('runs the existing revision without saving and links to execution logs', async () => {
+  vi.mocked(api.run).mockResolvedValue({ id: 'run-1', status: 'Queued' } as Run);
+  render(<App pipelineId="pipeline-1" />);
+  await screen.findByText('Revision 4 · saved');
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Save & run' }));
+  expect(api.save).not.toHaveBeenCalled();
+  expect(api.run).toHaveBeenCalledWith('pipeline-1', 4, 'development');
+  expect(await screen.findByRole('link', { name: 'execution logs' })).toHaveAttribute('href', '?page=logs&pipeline=pipeline-1');
+});
+
+it('confirms leaving the designer when the name has unsaved changes', async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.setAttribute('open', ''); } });
+  const user = userEvent.setup();
+  render(<App pipelineId="pipeline-1" />);
+  const name = await screen.findByLabelText('Pipeline name');
+  await user.type(name, ' changed');
+  await user.click(screen.getByRole('link', { name: 'Back to pipelines' }));
+  expect(screen.getByRole('dialog', { name: 'Leave designer?' })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+});
 
 it('automatically opens the saved workspace and uses its revision when saving', async () => {
   render(<App pipelineId="pipeline-1" />);

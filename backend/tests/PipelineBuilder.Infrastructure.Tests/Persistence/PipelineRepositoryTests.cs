@@ -73,6 +73,29 @@ public sealed class PipelineRepositoryTests
         (await new DesignerQueries(_db).GetRun(claimed.Id, _ct))!.Status.ShouldBe("Running");
     }
 
+    [TestMethod]
+    public async Task ClaimNext_When_ConcurrentRunnersCompete_Then_EachRunIsClaimedOnce()
+    {
+        var pipeline = await CreatePipeline("Concurrent claims");
+        var ids = new List<Guid>();
+        await using (var transaction = await new UnitOfWork(_db).Begin(_ct))
+        {
+            for (var i = 0; i < 4; i++)
+                ids.Add((await _sut.Enqueue(pipeline.Id, 1, new(pipeline.Document.Definition, "test", new(), "1.0.0"), _ct)).Value.Id);
+            await transaction.Commit(_ct);
+        }
+
+        async Task<Guid?> Claim()
+        {
+            await using var db = new PipelineDbContext(new DbContextOptionsBuilder<PipelineDbContext>().UseNpgsql(_postgres.GetConnectionString()).Options);
+            return (await new PipelineRepository(db).ClaimNext(_ct))?.Id;
+        }
+
+        var claimed = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Claim()));
+        claimed.Where(id => id.HasValue).Select(id => id!.Value).Order().ShouldBe(ids.Order());
+        claimed.Count(id => id is null).ShouldBe(4);
+    }
+
     private async Task<SavedPipelineRecord> CreatePipeline(string name)
     {
         var document = new DocumentRecord(name, new(1, [new CsvRecord("csv", "in.csv", [new("age", ColumnTypeRecord.Int64)]), new ParquetRecord("out", "out.parquet")]),

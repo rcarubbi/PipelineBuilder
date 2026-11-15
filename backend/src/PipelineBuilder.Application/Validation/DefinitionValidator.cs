@@ -28,6 +28,18 @@ public sealed class DefinitionValidator : AbstractValidator<DefinitionRecord>
                 case ParquetRecord parquet:
                     if (parquet.Path is null) context.AddFailure("Output path is required.");
                     break;
+                case CsvOutputRecord csv:
+                    if (csv.Path is null || csv.Delimiter is null) context.AddFailure("CSV output path and delimiter are required.");
+                    break;
+                case ParquetInputRecord parquet:
+                    if (parquet.Path is null || !ValidColumns(parquet.Schema)) context.AddFailure("Parquet input path and a valid schema are required.");
+                    break;
+                case ExcelInputRecord excel:
+                    if (excel.Path is null || excel.Sheet is null || !ValidColumns(excel.Schema)) context.AddFailure("Excel input path, sheet and a valid schema are required.");
+                    break;
+                case ExcelOutputRecord excel:
+                    if (excel.Path is null || excel.Sheet is null) context.AddFailure("Excel output path and sheet are required.");
+                    break;
             }
         });
     }

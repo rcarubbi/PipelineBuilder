@@ -10,10 +10,10 @@ public sealed record ColumnModel(string Name, ColumnTypeRecord Type, bool Nullab
     public static ColumnModel MapFrom(ColumnRecord column) => new(column.Name, column.Type, column.Nullable, column.Precision, column.Scale);
 }
 public sealed record MappingModel(string Source, ColumnModel Target, string? Format = null);
-public sealed record DefinitionModel([property: JsonRequired] int FormatVersion, StepModel[] Steps)
+public sealed record DefinitionModel([property: JsonRequired] int FormatVersion, StepModel[] Steps, VariableRecord[]? Variables = null)
 {
-    public DefinitionRecord MapTo() => new(FormatVersion, Steps?.Select(s => s?.MapTo()!).ToArray()!);
-    public static DefinitionModel MapFrom(DefinitionRecord definition) => new(definition.FormatVersion, definition.Steps.Select(StepModel.MapFrom).ToArray());
+    public DefinitionRecord MapTo() => new(FormatVersion, Steps?.Select(s => s?.MapTo()!).ToArray()!, Variables);
+    public static DefinitionModel MapFrom(DefinitionRecord definition) => new(definition.FormatVersion, definition.Steps.Select(StepModel.MapFrom).ToArray(), definition.Variables);
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
@@ -21,21 +21,29 @@ public sealed record DefinitionModel([property: JsonRequired] int FormatVersion,
 [JsonDerivedType(typeof(MapModel), "map")]
 [JsonDerivedType(typeof(FilterModel), "filter")]
 [JsonDerivedType(typeof(ParquetModel), "parquet")]
+[JsonDerivedType(typeof(CsvOutputModel), "csvOutput")]
+[JsonDerivedType(typeof(ParquetInputModel), "parquetInput")]
+[JsonDerivedType(typeof(ExcelInputModel), "excelInput")]
+[JsonDerivedType(typeof(ExcelOutputModel), "excelOutput")]
 public abstract record StepModel(string Id)
 {
     public abstract StepRecord MapTo();
     public static StepModel MapFrom(StepRecord step) => step switch
     {
-        CsvRecord csv => new CsvModel(csv.Id, csv.Path, csv.Schema.Select(ColumnModel.MapFrom).ToArray(), csv.Delimiter, csv.HasHeader),
+        CsvRecord csv => new CsvModel(csv.Id, csv.Path, csv.Schema.Select(ColumnModel.MapFrom).ToArray(), csv.Delimiter, csv.HasHeader, csv.PathExpression),
         MapRecord map => new MapModel(map.Id, map.Mappings.Select(m => new MappingModel(m.Source, ColumnModel.MapFrom(m.Target), m.Format)).ToArray()),
         FilterRecord filter => new FilterModel(filter.Id, PredicateModel.MapFrom(filter.Criteria)),
-        ParquetRecord parquet => new ParquetModel(parquet.Id, parquet.Path),
+        ParquetRecord parquet => new ParquetModel(parquet.Id, parquet.Path, parquet.PathExpression),
+        CsvOutputRecord csv => new CsvOutputModel(csv.Id, csv.Path, csv.Delimiter, csv.HasHeader, csv.PathExpression),
+        ParquetInputRecord parquet => new ParquetInputModel(parquet.Id, parquet.Path, parquet.Schema.Select(ColumnModel.MapFrom).ToArray(), parquet.PathExpression),
+        ExcelInputRecord excel => new ExcelInputModel(excel.Id, excel.Path, excel.Schema.Select(ColumnModel.MapFrom).ToArray(), excel.Sheet, excel.HasHeader, excel.PathExpression),
+        ExcelOutputRecord excel => new ExcelOutputModel(excel.Id, excel.Path, excel.Sheet, excel.HasHeader, excel.PathExpression),
         _ => throw new ArgumentException("Unsupported step.")
     };
 }
-public sealed record CsvModel(string Id, string Path, ColumnModel[] Schema, string Delimiter = ",", bool HasHeader = true) : StepModel(Id)
+public sealed record CsvModel(string Id, string Path, ColumnModel[] Schema, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepModel(Id)
 {
-    public override StepRecord MapTo() => new CsvRecord(Id, Path, Schema?.Select(c => c?.MapTo()!).ToArray()!, Delimiter, HasHeader);
+    public override StepRecord MapTo() => new CsvRecord(Id, Path, Schema?.Select(c => c?.MapTo()!).ToArray()!, Delimiter, HasHeader, PathExpression);
 }
 public sealed record MapModel(string Id, MappingModel[] Mappings) : StepModel(Id)
 {
@@ -45,9 +53,25 @@ public sealed record FilterModel(string Id, PredicateModel Criteria) : StepModel
 {
     public override StepRecord MapTo() => new FilterRecord(Id, Criteria?.MapTo()!);
 }
-public sealed record ParquetModel(string Id, string Path) : StepModel(Id)
+public sealed record ParquetModel(string Id, string Path, TextExpressionRecord? PathExpression = null) : StepModel(Id)
 {
-    public override StepRecord MapTo() => new ParquetRecord(Id, Path);
+    public override StepRecord MapTo() => new ParquetRecord(Id, Path, PathExpression);
+}
+public sealed record CsvOutputModel(string Id, string Path, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepModel(Id)
+{
+    public override StepRecord MapTo() => new CsvOutputRecord(Id, Path, Delimiter, HasHeader, PathExpression);
+}
+public sealed record ParquetInputModel(string Id, string Path, ColumnModel[] Schema, TextExpressionRecord? PathExpression = null) : StepModel(Id)
+{
+    public override StepRecord MapTo() => new ParquetInputRecord(Id, Path, Schema?.Select(c => c?.MapTo()!).ToArray()!, PathExpression);
+}
+public sealed record ExcelInputModel(string Id, string Path, ColumnModel[] Schema, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepModel(Id)
+{
+    public override StepRecord MapTo() => new ExcelInputRecord(Id, Path, Schema?.Select(c => c?.MapTo()!).ToArray()!, Sheet, HasHeader, PathExpression);
+}
+public sealed record ExcelOutputModel(string Id, string Path, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepModel(Id)
+{
+    public override StepRecord MapTo() => new ExcelOutputRecord(Id, Path, Sheet, HasHeader, PathExpression);
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
@@ -59,15 +83,15 @@ public abstract record PredicateModel
     public abstract PredicateRecord MapTo();
     public static PredicateModel MapFrom(PredicateRecord predicate) => predicate switch
     {
-        ComparisonRecord compare => new ComparisonModel(compare.Column, compare.Operator, compare.Value),
+        ComparisonRecord compare => new ComparisonModel(compare.Column, compare.Operator, compare.Value, compare.ColumnExpression, compare.ValueExpression),
         NullRecord check => new NullModel(check.Column, check.IsNull),
         LogicalRecord logical => new LogicalModel(logical.Operator, logical.Children.Select(MapFrom).ToArray()),
         _ => throw new ArgumentException("Unsupported expression.")
     };
 }
-public sealed record ComparisonModel(string Column, string Operator, string Value) : PredicateModel
+public sealed record ComparisonModel(string Column, string Operator, string Value, TextExpressionRecord? ColumnExpression = null, TextExpressionRecord? ValueExpression = null) : PredicateModel
 {
-    public override PredicateRecord MapTo() => new ComparisonRecord(Column, Operator, Value);
+    public override PredicateRecord MapTo() => new ComparisonRecord(Column, Operator, Value, ColumnExpression, ValueExpression);
 }
 public sealed record NullModel(string Column, [property: JsonRequired] bool IsNull) : PredicateModel
 {

@@ -15,8 +15,17 @@ export function BlockProperties({ block, inputSchema, onChange, onDiscover }: Pr
 
   return <section aria-label="Block properties">
     <h2>{block.type.replace('pipeline_', '').replace('predicate_', '')} properties</h2>
-    {(block.type === 'pipeline_csv' || block.type === 'pipeline_parquet') &&
-      <label>Server file path<input value={block.getFieldValue('PATH')} onChange={e => field('PATH', e.target.value)} /></label>}
+    {['pipeline_csv', 'pipeline_parquet', 'pipeline_csvOutput', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_excelOutput'].includes(block.type) &&
+      <p>Connect a text expression to set the server file path.</p>}
+    {['pipeline_excelInput', 'pipeline_excelOutput'].includes(block.type) && <>
+      <label>Sheet name<input value={block.getFieldValue('SHEET')} onChange={e => field('SHEET', e.target.value)} /></label>
+      <label className="inline"><input type="checkbox" checked={block.getFieldValue('HEADER') === 'TRUE'} onChange={e => field('HEADER', e.target.checked ? 'TRUE' : 'FALSE')} />Header row</label>
+    </>}
+    {['pipeline_parquetInput', 'pipeline_excelInput'].includes(block.type) && <ColumnEditor columns={configuration.schema ?? []} onChange={schema => data({ schema })} />}
+    {block.type === 'pipeline_csvOutput' && <>
+      <label>Delimiter<input maxLength={1} value={block.getFieldValue('DELIMITER')} onChange={e => field('DELIMITER', e.target.value)} /></label>
+      <label className="inline"><input type="checkbox" checked={block.getFieldValue('HEADER') === 'TRUE'} onChange={e => field('HEADER', e.target.checked ? 'TRUE' : 'FALSE')} />Header row</label>
+    </>}
     {block.type === 'pipeline_csv' && <>
       <label>Delimiter<input maxLength={1} value={block.getFieldValue('DELIMITER')} onChange={e => field('DELIMITER', e.target.value)} /></label>
       <label className="inline"><input type="checkbox" checked={block.getFieldValue('HEADER') === 'TRUE'} onChange={e => field('HEADER', e.target.checked ? 'TRUE' : 'FALSE')} />Header row</label>

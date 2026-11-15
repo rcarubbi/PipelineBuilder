@@ -1,13 +1,15 @@
 import { Fragment, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { IconButton, IconLink } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Loading } from '../components/Loading';
 import { api } from '../pipeline/api';
 import { describe } from '../schedule/cron';
 import type { PipelineList, PipelineSummary, Schedule } from '../pipeline/types';
 
 const sameEnvironments = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x));
 
-export function PipelinesPage() {
+export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId?: string) => void } = {}) {
   const [page, setPage] = useState(1);
   const [refresh, setRefresh] = useState(0);
   const [list, setList] = useState<PipelineList | null>(null);
@@ -17,6 +19,8 @@ export function PipelinesPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [deleting, setDeleting] = useState<PipelineSummary | null>(null);
+  const [runNotice, setRunNotice] = useState<{ id: string; pipelineId: string } | null>(null);
   const [environments, setEnvironments] = useState<Record<string, string>>({});
   const importInput = useRef<HTMLInputElement>(null);
 
@@ -69,16 +73,15 @@ export function PipelinesPage() {
   }
 
   async function run(pipeline: PipelineSummary) {
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true); setError(''); setMessage(''); setRunNotice(null);
     try {
       const result = await api.run(pipeline.id, pipeline.revision, environments[pipeline.id] ?? pipeline.environments[0]);
-      setMessage(`Run ${result.id} queued for ${pipeline.name}. Open its logs to see the result.`);
+      setRunNotice({ id: result.id, pipelineId: pipeline.id });
     } catch (ex) { setError(ex instanceof Error ? ex.message : 'Could not start pipeline.'); }
     finally { setBusy(false); }
   }
 
   async function remove(pipeline: PipelineSummary) {
-    if (!window.confirm(`Delete "${pipeline.name}"? Execution history and generated files will be kept.`)) return;
     setBusy(true); setError(''); setMessage('');
     try {
       await api.deletePipeline(pipeline.id, pipeline.revision);
@@ -98,7 +101,8 @@ export function PipelinesPage() {
       if (file.size > 1024 * 1024) throw new Error('JSON files must be 1 MiB or smaller.');
       const { parseImport } = await import('../pipeline/exchange');
       const imported = await api.importPipeline(parseImport(await file.text(), file.name));
-      window.location.assign(`?page=designer&pipeline=${encodeURIComponent(imported.id)}`);
+      if (onOpenDesigner) onOpenDesigner(imported.id);
+      else window.location.assign(`?page=designer&pipeline=${encodeURIComponent(imported.id)}`);
     } catch (ex) { setError(ex instanceof Error ? ex.message : 'Could not import pipeline.'); }
     finally { setBusy(false); }
   }
@@ -117,16 +121,19 @@ export function PipelinesPage() {
     <PageHeader page="Pipelines" />
     <main>
       <section className="toolbar" aria-label="Pipeline list actions">
-        <IconLink icon="add" label="Create new pipeline" href="?page=designer" className="primary" />
+        <IconLink icon="add" label="Create new pipeline" href="?page=designer" className="primary" onClick={event => {
+          if (onOpenDesigner && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onOpenDesigner(); }
+        }} />
         <IconButton icon="import" label="Import pipeline from JSON" disabled={busy} onClick={() => importInput.current?.click()} />
         <input ref={importInput} type="file" accept=".json,application/json" hidden onChange={event => void importFile(event)} />
-        <IconButton icon="refresh" label="Refresh pipelines" disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
+        <IconButton icon="refresh" label="Refresh pipelines" loading={loading} disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
         <IconLink icon="clock" label="Manage schedules" href="?page=schedules" />
       </section>
       {message && <p role="status" className="notice">{message}</p>}
+      {runNotice && <p role="status" className="notice">Run {runNotice.id} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(runNotice.pipelineId)}`}>execution logs</a>.</p>}
       {error && <p role="alert" className="notice error">{error}</p>}
-      {loading && <p role="status">Loading pipelines…</p>}
-      {!loading && list && <>
+      {loading && <Loading label="Loading pipelines…" />}
+      {list && <>
         {list.pipelines.length === 0 ? <p>No pipelines yet. Use + to create one or import a JSON file.</p> : <div className="history-table">
           <table><caption>Saved pipelines — page {list.page}</caption>
             <thead><tr><th scope="col">Pipeline</th><th scope="col">Revision</th><th scope="col">Environment</th><th scope="col">Schedules</th><th scope="col">Actions</th></tr></thead>
@@ -148,8 +155,10 @@ export function PipelinesPage() {
                   onClick={() => startScheduling(pipeline)} />
                 <IconButton icon="export" label={`Export ${pipeline.name} as JSON`} disabled={busy} onClick={() => void exportPipeline(pipeline.id)} />
                 <IconLink icon="logs" label={`View logs for ${pipeline.name}`} href={`?page=logs&pipeline=${pipeline.id}`} />
-                <IconLink icon="edit" label={`Open ${pipeline.name} in designer`} href={`?page=designer&pipeline=${pipeline.id}`} />
-                <IconButton icon="trash" label={`Delete ${pipeline.name}`} className="danger" disabled={busy} onClick={() => void remove(pipeline)} />
+                <IconLink icon="edit" label={`Open ${pipeline.name} in designer`} href={`?page=designer&pipeline=${pipeline.id}`} onClick={event => {
+                  if (onOpenDesigner && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onOpenDesigner(pipeline.id); }
+                }} />
+                <IconButton icon="trash" label={`Delete ${pipeline.name}`} className="danger" disabled={busy} onClick={() => setDeleting(pipeline)} />
               </div></td>
             </tr>
             {scheduling?.pipelineId === pipeline.id && <tr className="schedule-row"><td colSpan={5}>
@@ -179,6 +188,7 @@ export function PipelinesPage() {
         <span>Page {page}</span>
         <IconButton icon="right" label="More pipelines" disabled={loading || busy || !!error || !list?.hasMore} onClick={() => setPage(n => n + 1)} />
       </nav>
+      {deleting && <ConfirmDialog title={`Delete ${deleting.name}?`} description="Execution history and generated files will be kept." confirmLabel="Delete pipeline" onCancel={() => setDeleting(null)} onConfirm={() => { const pipeline = deleting; setDeleting(null); void remove(pipeline); }} />}
     </main>
   </>;
 }

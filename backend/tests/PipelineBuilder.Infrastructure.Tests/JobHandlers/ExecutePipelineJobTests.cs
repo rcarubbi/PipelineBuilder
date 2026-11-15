@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PipelineBuilder.Application;
 using PipelineBuilder.Application.Contracts;
@@ -78,7 +79,7 @@ public sealed class ExecutePipelineJobTests
         _client = new HttpClient { BaseAddress = new Uri(_app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single()) };
     }
 
-    private void CreateSut() => _sut = new(_app!.Services.GetRequiredService<IServiceScopeFactory>(), _worker, NullLogger<ExecutePipelineJob>.Instance);
+    private void CreateSut() => _sut = new(_app!.Services.GetRequiredService<IServiceScopeFactory>(), _worker, _app.Services.GetRequiredService<IOptions<PipelineWorkerOptions>>(), NullLogger<ExecutePipelineJob>.Instance);
 
     [TestCleanup]
     public async Task Cleanup()
@@ -132,9 +133,6 @@ public sealed class ExecutePipelineJobTests
         runs.ShouldAllBe(run => run.StartedAt.HasValue && (run.StartedAt.Value - run.CreatedAt).TotalSeconds < 2);
         (runs.Max(run => run.StartedAt)!.Value - runs.Min(run => run.StartedAt)!.Value).TotalSeconds.ShouldBeLessThan(1);
         runs.ShouldAllBe(run => run.Error == "Output already exists; choose a different filename.");
-        var chronological = runs.OrderBy(run => run.StartedAt).ToArray();
-        for (var index = 1; index < chronological.Length; index++)
-            chronological[index].StartedAt!.Value.ShouldBeGreaterThanOrEqualTo(chronological[index - 1].FinishedAt!.Value);
         await _sut.Execute(_timeout.Token); // A second dashboard invocation must not create another pump.
         _worker.IsRunning.ShouldBeTrue();
         await Task.Delay(TimeSpan.FromSeconds(2), _timeout.Token);

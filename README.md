@@ -11,7 +11,7 @@ data/output/ Completed Parquet files (ignored by Git)
 
 ## Run locally
 
-Requires .NET 10 SDK, Node 24, and Docker with its daemon running. From this directory:
+Requires .NET 10 SDK, Node 24, and Docker with its daemon running. Excel support uses the MIT-licensed ExcelReader.NET library. From this directory:
 
 ```powershell
 docker compose up -d --wait
@@ -43,8 +43,9 @@ If the Volta npm PowerShell launcher is broken, invoke the installed `npm-cli.js
 
 1. Open the pipeline list and choose the **+** icon to create a pipeline. The initial canvas reads `customers.csv`, keeps adults, and writes `customers.parquet`.
 2. Select CSV to edit its schema or discover types from up to 100 records.
-3. Use the Blockly toolbox to drag processing blocks into the chain. Select a map to configure output columns. Select a filter expression to change its column/operator/constant. Switch the canvas to **Executable JSON** with the code icon above it to inspect the read-only definition the backend executes; switch back with the blocks icon.
-4. Configure named environments in the collapsible **Environments** panel below the canvas (it opens automatically when something needs fixing): add environments and `NAME = value` variables with the + icons, or tick **Edit as JSON (advanced)** to edit the same data as JSON. Variable names must start with a letter or underscore. Invalid entries are flagged and block saving. `${INPUT_FILE}` and `${OUTPUT_FILE}` resolve using the selected environment.
+3. Use the Blockly toolbox to drag processing blocks into the chain. Select a map to configure output columns. Select a filter expression to change its column/operator/constant. Switch the canvas to **Pipeline JSON** with the code icon above it to inspect the read-only definition and environment values; switch back with the blocks icon. This preview can contain sensitive values.
+4. Configure named environments in the collapsible **Environments** panel below the canvas (it opens automatically when something needs fixing): add environments and `NAME = value` variables with the + icons, or tick **Edit as JSON (advanced)** to edit the same data as JSON. Variable names must start with a letter or underscore. Invalid entries are flagged and block saving. `${INPUT_FILE}` and `${OUTPUT_FILE}` resolve using the selected environment. `${CURRENT_ENVIRONMENT}` always resolves to the selected environment name, even if a variable with that name is configured; it is also available as an environment text expression.
+   To define a pipeline variable, use Blockly's **Variables** category: create a variable, connect a text expression to its **set** block, and use its getter in a path. Assign each variable only once; values are resolved when the run is queued. Use an environment variable block named `CURRENT_ENVIRONMENT` to insert the selected environment name into a text expression.
 5. Validate, then **Save & run**. The completed sample has 3 input records and 2 output records.
 6. Return to the pipeline list with the list icon. The pencil icon opens a saved pipeline directly in the designer, restoring its workspace and revision automatically. Existing bookmarked pipeline URLs still work.
 7. Change the output filename before running again. Existing destinations are never overwritten.
@@ -67,7 +68,7 @@ Paths are relative to the configured backend input/output roots, not the browser
 - `GET /api/v1/pipelines?page=1` lists pipeline IDs, names, revisions and environment names only (25 per page). `DELETE /api/v1/pipelines/{id}?revision=1` soft-deletes that revision with concurrency protection.
 - `GET /api/v1/runs?page=1&pipelineId={id}` returns execution metadata/results only, with bounded pagination; it never includes snapshot environment variables or source records. Omit `pipelineId` to see all history, including deleted pipelines. This is run history, not a raw server-log viewer.
 - Workspace state and executable definitions are separate, with shared stable block IDs.
-- One CSV input, zero or more map/filter steps, one Parquet output; no branching or scripts.
+- One CSV, Parquet or Excel input, zero or more map/filter steps, and one CSV, Parquet or Excel output; no branching or scripts. Excel supports `.xls` (BIFF8) and `.xlsx` and requires a sheet name. Writing `.xls` buffers the workbook in memory. Input schemas are configured in the designer; automatic schema discovery remains available for CSV only.
 - Schemas: string, boolean, int64, decimal (precision/scale), double, date, UTC timestamp; nullable fields supported.
 - CSV: UTF-8, configurable single-character delimiter, double-quoted fields, optional header. With headers, names/count must match the confirmed schema. Without headers, fields follow schema order.
 - Invariant conversions. Date defaults to `yyyy-MM-dd`; timestamp defaults to .NET round-trip `O`. Date/timestamp mappings can specify a parse format. Blank numeric/boolean/date values become null only for nullable columns; strings preserve empty text.
@@ -76,7 +77,7 @@ Paths are relative to the configured backend input/output roots, not the browser
 - PostgreSQL stores the latest pipeline revision, environments, workspace, immutable run snapshots, and run status. Saving uses optimistic revision checks.
 - Snapshot creation and enqueueing are transactional. Snapshots contain resolved paths, selected environment variables, schemas and engine version. **Input files are not snapshotted.**
 - File checks run after the attempt is recorded. An existing output, missing input, or invalid server path becomes a failed run in execution history, with its reason and block ID; files are never overwritten. Invalid definitions, missing variables, and stale revisions are still rejected before enqueueing.
-- One long-running TickerQ job drains the durable PostgreSQL run queue sequentially, with a fresh DI scope for each claim/execution. When idle it waits one second; when work exists it starts the next run immediately, without scheduling a new ticker or adding a gap between runs. There is no automatic pipeline retry.
+- One long-running TickerQ job runs a pool that drains the durable PostgreSQL queue, with a fresh DI scope for each claim/execution. Configure `PipelineWorker:PoolSize` (environment variable `PipelineWorker__PoolSize`, default 2, range 1–64) to limit concurrent runs. Idle runners wait one second; busy runners claim the next run immediately. Runs can finish out of order and competing outputs are never overwritten. There is no automatic pipeline retry. Run only one API instance against a database: recovery marks all running executions interrupted on startup.
 - Startup waits for the worker to start, and readiness requires the worker itself to be running, not just the scheduler. Duplicate dashboard invocations cannot start a second worker in the same process.
 - CSV processing streams into 1,024-row Parquet batches. Each CSV field is limited to 1 MiB. Output is written to a unique temporary file, closed, and moved without overwrite on success. Cancellation/failure cleans up temporary output.
 - Cancellation is cooperative; a request arriving after final publication may be too late. Counts are currently returned on successful completion, not live per step.

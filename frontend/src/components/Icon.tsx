@@ -35,8 +35,8 @@ export function Icon({ name }: { name: IconName }) {
   </svg>;
 }
 
-export function IconButton({ icon, label, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { icon: IconName; label: string }) {
-  return <button type="button" className={`icon-button ${className}`} title={label} aria-label={label} {...props}><Icon name={icon} /></button>;
+export function IconButton({ icon, label, className = '', loading = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { icon: IconName; label: string; loading?: boolean }) {
+  return <button type="button" className={`icon-button ${className}`} title={label} aria-label={label} aria-busy={loading || undefined} {...props}>{loading ? <span className="button-spinner" aria-hidden="true" /> : <Icon name={icon} />}</button>;
 }
 
 export function IconLink({ icon, label, className = '', ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { icon: IconName; label: string }) {

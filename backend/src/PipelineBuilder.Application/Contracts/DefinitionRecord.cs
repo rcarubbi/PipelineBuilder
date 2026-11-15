@@ -7,25 +7,48 @@ namespace PipelineBuilder.Application.Contracts;
 public sealed record ColumnRecord(string Name, ColumnTypeRecord Type, bool Nullable = false, int Precision = 18, int Scale = 2);
 public enum ColumnTypeRecord { String, Boolean, Int64, Decimal, Double, Date, Timestamp }
 public sealed record MappingRecord(string Source, ColumnRecord Target, string? Format = null);
-public sealed record DefinitionRecord(int FormatVersion, StepRecord[] Steps);
+public sealed record DefinitionRecord(int FormatVersion, StepRecord[] Steps, VariableRecord[]? Variables = null);
+
+public sealed record VariableRecord(string Name, TextExpressionRecord Value);
+
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(TextLiteralRecord), "literal")]
+[JsonDerivedType(typeof(TextConcatRecord), "concat")]
+[JsonDerivedType(typeof(TextVariableRecord), "variable")]
+[JsonDerivedType(typeof(TextEnvironmentRecord), "environment")]
+[JsonDerivedType(typeof(TextUtcRecord), "utc")]
+public abstract record TextExpressionRecord(string Id);
+public sealed record TextLiteralRecord(string Id, string Value) : TextExpressionRecord(Id);
+public sealed record TextConcatRecord(string Id, TextExpressionRecord Left, TextExpressionRecord Right) : TextExpressionRecord(Id);
+public sealed record TextVariableRecord(string Id, string Name) : TextExpressionRecord(Id);
+public sealed record TextEnvironmentRecord(string Id, string Name) : TextExpressionRecord(Id);
+public sealed record TextUtcRecord(string Id, string Format, TextExpressionRecord? FormatExpression = null) : TextExpressionRecord(Id);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(CsvRecord), "csv")]
 [JsonDerivedType(typeof(MapRecord), "map")]
 [JsonDerivedType(typeof(FilterRecord), "filter")]
 [JsonDerivedType(typeof(ParquetRecord), "parquet")]
+[JsonDerivedType(typeof(CsvOutputRecord), "csvOutput")]
+[JsonDerivedType(typeof(ParquetInputRecord), "parquetInput")]
+[JsonDerivedType(typeof(ExcelInputRecord), "excelInput")]
+[JsonDerivedType(typeof(ExcelOutputRecord), "excelOutput")]
 public abstract record StepRecord(string Id);
-public sealed record CsvRecord(string Id, string Path, ColumnRecord[] Schema, string Delimiter = ",", bool HasHeader = true) : StepRecord(Id);
+public sealed record CsvRecord(string Id, string Path, ColumnRecord[] Schema, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
 public sealed record MapRecord(string Id, MappingRecord[] Mappings) : StepRecord(Id);
 public sealed record FilterRecord(string Id, PredicateRecord Criteria) : StepRecord(Id);
-public sealed record ParquetRecord(string Id, string Path) : StepRecord(Id);
+public sealed record ParquetRecord(string Id, string Path, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record CsvOutputRecord(string Id, string Path, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record ParquetInputRecord(string Id, string Path, ColumnRecord[] Schema, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record ExcelInputRecord(string Id, string Path, ColumnRecord[] Schema, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record ExcelOutputRecord(string Id, string Path, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(ComparisonRecord), "compare")]
 [JsonDerivedType(typeof(NullRecord), "null")]
 [JsonDerivedType(typeof(LogicalRecord), "logical")]
 public abstract record PredicateRecord;
-public sealed record ComparisonRecord(string Column, string Operator, string Value) : PredicateRecord;
+public sealed record ComparisonRecord(string Column, string Operator, string Value, TextExpressionRecord? ColumnExpression = null, TextExpressionRecord? ValueExpression = null) : PredicateRecord;
 public sealed record NullRecord(string Column, bool IsNull) : PredicateRecord;
 public sealed record LogicalRecord(string Operator, PredicateRecord[] Children) : PredicateRecord;
 public sealed record IssueRecord(string BlockId, string Message);
@@ -56,10 +79,15 @@ public static class DefinitionMapping
         MapRecord map => new MapStep(map.Id, map.Mappings.Select(m => new ColumnMapping(m.Source, m.Target.MapTo(), m.Format)).ToArray()),
         FilterRecord filter => new FilterStep(filter.Id, filter.Criteria.MapTo()),
         ParquetRecord parquet => new ParquetStep(parquet.Id, parquet.Path),
+        CsvOutputRecord csv => new CsvOutputStep(csv.Id, csv.Path, csv.Delimiter, csv.HasHeader),
+        ParquetInputRecord parquet => new ParquetInputStep(parquet.Id, parquet.Path, parquet.Schema.Select(MapTo).ToArray()),
+        ExcelInputRecord excel => new ExcelInputStep(excel.Id, excel.Path, excel.Schema.Select(MapTo).ToArray(), excel.Sheet, excel.HasHeader),
+        ExcelOutputRecord excel => new ExcelOutputStep(excel.Id, excel.Path, excel.Sheet, excel.HasHeader),
         _ => throw new ArgumentException("Unsupported step.")
     };
     public static IRowPredicate MapTo(this PredicateRecord predicate) => predicate switch
     {
+        ComparisonRecord compare when compare.ColumnExpression is not null || compare.ValueExpression is not null => new DeferredComparisonPredicate(),
         ComparisonRecord compare => new ComparisonPredicate(compare.Column, Enum.Parse<ComparisonOperator>(compare.Operator, true), compare.Value),
         NullRecord check => new NullPredicate(check.Column, check.IsNull),
         LogicalRecord logical => new LogicalPredicate(Enum.Parse<LogicalOperator>(logical.Operator, true), logical.Children.Select(MapTo).ToArray()),
@@ -68,4 +96,11 @@ public static class DefinitionMapping
     public static AnalysisRecord MapTo(this PipelineAnalysis analysis) => new(
         analysis.Issues.Select(i => new IssueRecord(i.BlockId, i.Message)).ToArray(),
         analysis.Schemas.Select(s => new SchemaRecord(s.BlockId, s.Input.Select(MapTo).ToArray(), s.Output.Select(MapTo).ToArray())).ToArray());
+}
+
+internal sealed class DeferredComparisonPredicate : IRowPredicate
+{
+    public bool Evaluate(IReadOnlyDictionary<string, object?> row, Column[] schema) =>
+        throw new InvalidOperationException("Resolve comparison expressions before execution.");
+    public void Validate(Column[] schema, List<PipelineIssue> issues, string blockId, int depth) { }
 }

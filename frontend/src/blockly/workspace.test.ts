@@ -22,6 +22,128 @@ describe('pipeline workspace', () => {
     expect(compileWorkspace(workspace)).toEqual(expected);
   });
 
+  it('compiles and restores a CSV output block', () => {
+    const previous = workspace.getBlockById('parquet')!.previousConnection!.targetConnection!;
+    workspace.getBlockById('parquet')!.dispose();
+    const output = workspace.newBlock('pipeline_csvOutput');
+    const path = workspace.newBlock('value_literal');
+    path.setFieldValue('result.csv', 'VALUE');
+    output.getInput('PATH')!.connection!.connect(path.outputConnection!);
+    previous.connect(output.previousConnection!);
+    const definition = compileWorkspace(workspace);
+    expect(definition.steps.at(-1)).toMatchObject({ type: 'csvOutput', delimiter: ',', hasHeader: true, pathExpression: { kind: 'literal', value: 'result.csv' } });
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
+      expect(compileWorkspace(restored)).toEqual(definition);
+    } finally { restored.dispose(); }
+  });
+
+  it.each(['parquetInput', 'excelInput'] as const)('compiles and restores %s input with Excel output', inputType => {
+    workspace.clear();
+    const input = workspace.newBlock(`pipeline_${inputType}`);
+    input.data = JSON.stringify({ schema: [{ name: 'name', type: 'string', nullable: false }] });
+    const inputPath = workspace.newBlock('value_literal');
+    inputPath.setFieldValue(inputType === 'excelInput' ? 'source.xlsx' : 'source.parquet', 'VALUE');
+    input.getInput('PATH')!.connection!.connect(inputPath.outputConnection!);
+    if (inputType === 'excelInput') input.setFieldValue('Source', 'SHEET');
+    const output = workspace.newBlock('pipeline_excelOutput');
+    output.setFieldValue('Results', 'SHEET');
+    const outputPath = workspace.newBlock('value_literal');
+    outputPath.setFieldValue('output.xls', 'VALUE');
+    output.getInput('PATH')!.connection!.connect(outputPath.outputConnection!);
+    input.nextConnection!.connect(output.previousConnection!);
+
+    const definition = compileWorkspace(workspace);
+    expect(definition.steps[0]).toMatchObject({ type: inputType, schema: [{ name: 'name', type: 'string' }] });
+    expect(definition.steps[1]).toMatchObject({ type: 'excelOutput', sheet: 'Results', hasHeader: true });
+    if (inputType === 'excelInput') expect(definition.steps[0]).toMatchObject({ sheet: 'Source' });
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
+      expect(compileWorkspace(restored)).toEqual(definition);
+    } finally { restored.dispose(); }
+  });
+
+  it('compiles native variable assignments and references, including renaming and restored definitions', () => {
+    const variable = workspace.getVariableMap().createVariable('filename');
+    const assignment = workspace.newBlock('variables_set');
+    assignment.setFieldValue(variable.getId(), 'VAR');
+    const value = workspace.newBlock('value_literal');
+    value.setFieldValue('renamed.csv', 'VALUE');
+    assignment.getInput('VALUE')!.connection!.connect(value.outputConnection!);
+    const csv = workspace.getBlockById('csv')!;
+    csv.getInputTargetBlock('PATH')!.dispose();
+    const reference = workspace.newBlock('variables_get');
+    reference.setFieldValue(variable.getId(), 'VAR');
+    csv.getInput('PATH')!.connection!.connect(reference.outputConnection!);
+    workspace.getVariableMap().renameVariable(variable, 'input_file');
+
+    const definition = compileWorkspace(workspace);
+    expect(definition.variables).toEqual([{ name: 'input_file', value: { kind: 'literal', id: value.id, value: 'renamed.csv' } }]);
+    expect(definition.steps[0]).toMatchObject({ pathExpression: { kind: 'variable', name: 'input_file' } });
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
+      expect(compileWorkspace(restored)).toEqual(definition);
+      expect(restored.getBlocksByType('variables_set', false)).toHaveLength(1);
+      expect(restored.getBlocksByType('variables_get', false)).toHaveLength(1);
+    } finally { restored.dispose(); }
+  });
+
+  it('rejects multiple assignments to the same variable', () => {
+    const variable = workspace.getVariableMap().createVariable('name');
+    for (const text of ['a', 'b']) {
+      const assignment = workspace.newBlock('variables_set');
+      assignment.setFieldValue(variable.getId(), 'VAR');
+      const value = workspace.newBlock('value_literal');
+      value.setFieldValue(text, 'VALUE');
+      assignment.getInput('VALUE')!.connection!.connect(value.outputConnection!);
+    }
+    expect(() => compileWorkspace(workspace)).toThrow('Variable names must be nonempty and unique');
+  });
+
+  it('compiles native variable assignments connected within the pipeline chain', () => {
+    const variable = workspace.getVariableMap().createVariable('filename');
+    const assignment = workspace.newBlock('variables_set');
+    assignment.setFieldValue(variable.getId(), 'VAR');
+    const value = workspace.newBlock('value_literal');
+    value.setFieldValue('input.csv', 'VALUE');
+    assignment.getInput('VALUE')!.connection!.connect(value.outputConnection!);
+    const csv = workspace.getBlockById('csv')!;
+    const next = csv.nextConnection!.targetConnection!;
+    csv.nextConnection!.disconnect();
+    csv.nextConnection!.connect(assignment.previousConnection!);
+    assignment.nextConnection!.connect(next);
+
+    const definition = compileWorkspace(workspace);
+    expect(definition.variables).toEqual([{ name: 'filename', value: { kind: 'literal', id: value.id, value: 'input.csv' } }]);
+    expect(definition.steps.map(step => step.type)).toEqual(['csv', 'filter', 'parquet']);
+  });
+
+  it('connects text expressions to comparison fields and UTC format', () => {
+    const predicate = workspace.getBlockById('adults')!.getInputTargetBlock('CRITERIA')!;
+    const environment = workspace.newBlock('value_current_environment');
+    predicate.getInput('COLUMN_EXPRESSION')!.connection!.connect(environment.outputConnection!);
+    const utc = workspace.newBlock('value_utc');
+    const format = workspace.newBlock('value_literal');
+    format.setFieldValue('yyyy', 'VALUE');
+    utc.getInput('FORMAT_EXPRESSION')!.connection!.connect(format.outputConnection!);
+    predicate.getInput('VALUE_EXPRESSION')!.connection!.connect(utc.outputConnection!);
+
+    const definition = compileWorkspace(workspace);
+    expect(definition.steps[1]).toMatchObject({ criteria: {
+      columnExpression: { kind: 'environment', name: 'CURRENT_ENVIRONMENT' },
+      valueExpression: { kind: 'utc', formatExpression: { kind: 'literal', value: 'yyyy' } },
+    } });
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
+      expect(compileWorkspace(restored)).toEqual(definition);
+      expect(restored.getBlocksByType('value_current_environment', false)).toHaveLength(1);
+    } finally { restored.dispose(); }
+  });
+
   it('rebuilds Blockly state from the executable definition with stable step IDs', () => {
     const definition = compileWorkspace(workspace);
     const rebuilt = new Blockly.Workspace();
