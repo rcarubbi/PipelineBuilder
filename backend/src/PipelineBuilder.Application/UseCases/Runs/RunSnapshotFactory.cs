@@ -17,13 +17,14 @@ internal static partial class RunSnapshotFactory
         try
         {
             var now = DateTimeOffset.UtcNow;
-            var declarations = new Dictionary<string, TextExpressionRecord>(StringComparer.Ordinal);
-            foreach (var variable in pipeline.Document.Definition.Variables ?? [])
-            {
-                if (variable is null || string.IsNullOrWhiteSpace(variable.Name) || variable.Value is null ||
-                    !declarations.TryAdd(variable.Name, variable.Value))
-                    throw new PipelineDataException("Variable names must be nonempty and unique.");
-            }
+            var configuredVariables = pipeline.Document.Definition.Variables ?? [];
+            var validVariables = configuredVariables.OfType<VariableRecord>()
+                .Where(variable => !string.IsNullOrWhiteSpace(variable.Name) && variable.Value is not null)
+                .ToArray();
+            if (validVariables.Length != configuredVariables.Length ||
+                validVariables.Select(variable => variable.Name).Distinct(StringComparer.Ordinal).Count() != validVariables.Length)
+                throw new PipelineDataException("Variable names must be nonempty and unique.");
+            var declarations = validVariables.ToDictionary(variable => variable.Name, variable => variable.Value, StringComparer.Ordinal);
             var active = new HashSet<string>(StringComparer.Ordinal);
             string Evaluate(TextExpressionRecord? expression, int depth)
             {

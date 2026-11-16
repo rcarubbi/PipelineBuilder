@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { IconButton } from './Icon';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
+import { SwitchField } from './ui/switch-field';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 export type Environments = Record<string, Record<string, string>>;
 interface VariableRow { id: number; name: string; value: string }
@@ -90,12 +94,12 @@ export function EnvironmentEditor({ json, onChange }: Props) {
   return <details className="environment-panel" open={open || invalid} onToggle={e => setOpen(e.currentTarget.open)}>
     <summary onClick={e => { if (invalid) e.preventDefault(); }}>Environments{count !== null && <span className="muted"> ({count})</span>}{invalid && <span className="field-error"> — needs attention</span>}</summary>
     <div className="environment-header">
-      <label className="inline"><input type="checkbox" checked={advanced} disabled={!advanced && !!formError} onChange={e => switchMode(e.target.checked)} />Edit as JSON (advanced)</label>
+      <SwitchField label="Edit as JSON (advanced)" checked={advanced} disabled={!advanced && !!formError} onCheckedChange={switchMode} />
     </div>
     <p className="muted">Use an environment variable value block named <code>CURRENT_ENVIRONMENT</code> for the selected environment name. It overrides any configured variable with that name. In legacy file paths, use <code>{'${CURRENT_ENVIRONMENT}'}</code>. Relative paths start inside the configured server input/output directories.</p>
     {notice && <p role="alert" className="field-error">{notice}</p>}
     {advanced ? <>
-      <label>Variables by environment (JSON)<textarea rows={9} spellCheck={false} value={json} onChange={e => {
+      <label>Variables by environment (JSON)<Textarea rows={9} spellCheck={false} value={json} onChange={e => {
         let error: string | null = null;
         try { parseEnvironments(e.target.value); } catch (ex) { error = (ex as Error).message; }
         onChange(e.target.value, error);
@@ -107,21 +111,21 @@ export function EnvironmentEditor({ json, onChange }: Props) {
         return <fieldset key={environment.id} className="environment-card">
           <legend>{label}</legend>
           <div className="actions">
-            <label>Environment name<input value={environment.name} onChange={e => updateEnvironment(environment.id, current => ({ ...current, name: e.target.value }))} /></label>
+            <label>Environment name<Input value={environment.name} onChange={e => updateEnvironment(environment.id, current => ({ ...current, name: e.target.value }))} /></label>
             <IconButton icon="trash" label={`Remove environment ${label}`} className="danger" disabled={rows.length === 1}
               onClick={() => setDeleting(environment)} />
           </div>
-          {environment.variables.length === 0 ? <p className="muted">No variables.</p> : <table className="variable-table">
-            <thead><tr><th scope="col">Variable</th><th scope="col">Value</th><th scope="col"><span className="visually-hidden">Actions</span></th></tr></thead>
-            <tbody>{environment.variables.map((variable, index) => <tr key={variable.id}>
-              <td><input aria-label={`Name of variable ${index + 1} in ${label}`} value={variable.name} spellCheck={false} placeholder="INPUT_FILE"
-                onChange={e => updateEnvironment(environment.id, current => ({ ...current, variables: current.variables.map(v => v.id === variable.id ? { ...v, name: e.target.value } : v) }))} /></td>
-              <td><input aria-label={`Value of ${variable.name.trim() || `variable ${index + 1}`} in ${label}`} value={variable.value} spellCheck={false}
-                onChange={e => updateEnvironment(environment.id, current => ({ ...current, variables: current.variables.map(v => v.id === variable.id ? { ...v, value: e.target.value } : v) }))} /></td>
-              <td><IconButton icon="trash" label={`Remove ${variable.name.trim() || `variable ${index + 1}`} from ${label}`}
-                onClick={() => updateEnvironment(environment.id, current => ({ ...current, variables: current.variables.filter(v => v.id !== variable.id) }))} /></td>
-            </tr>)}</tbody>
-          </table>}
+          {environment.variables.length === 0 ? <p className="muted">No variables.</p> : <Table className="variable-table">
+            <TableHeader><TableRow><TableHead scope="col">Variable</TableHead><TableHead scope="col">Value</TableHead><TableHead scope="col"><span className="visually-hidden">Actions</span></TableHead></TableRow></TableHeader>
+            <TableBody>{environment.variables.map((variable, index) => <TableRow key={variable.id}>
+              <TableCell><Input aria-label={`Name of variable ${index + 1} in ${label}`} value={variable.name} spellCheck={false} placeholder="INPUT_FILE"
+                onChange={e => updateEnvironment(environment.id, current => ({ ...current, variables: current.variables.map(v => v.id === variable.id ? { ...v, name: e.target.value } : v) }))} /></TableCell>
+              <TableCell><Input aria-label={`Value of ${variable.name.trim() || `variable ${index + 1}`} in ${label}`} value={variable.value} spellCheck={false}
+                onChange={e => updateEnvironment(environment.id, current => ({ ...current, variables: current.variables.map(v => v.id === variable.id ? { ...v, value: e.target.value } : v) }))} /></TableCell>
+              <TableCell><IconButton icon="trash" label={`Remove ${variable.name.trim() || `variable ${index + 1}`} from ${label}`}
+                onClick={() => updateEnvironment(environment.id, current => ({ ...current, variables: current.variables.filter(v => v.id !== variable.id) }))} /></TableCell>
+            </TableRow>)}</TableBody>
+          </Table>}
           <IconButton icon="add" label={`Add variable to ${label}`}
             onClick={() => updateEnvironment(environment.id, current => ({ ...current, variables: [...current.variables, { id: rowId(), name: '', value: '' }] }))} />
         </fieldset>;

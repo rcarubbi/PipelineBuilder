@@ -5,6 +5,12 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Loading } from '../components/Loading';
 import { api } from '../pipeline/api';
 import { describe } from '../schedule/cron';
+import { Select } from '../components/ui/select';
+import { Alert } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Card } from '../components/ui/card';
+import { Switch } from '../components/ui/switch';
 import type { PipelineList, PipelineSummary, Schedule } from '../pipeline/types';
 
 const sameEnvironments = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x));
@@ -122,7 +128,7 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
   return <>
     <PageHeader page="Pipelines" />
     <main>
-      <section className="toolbar" aria-label="Pipeline list actions">
+      <Card className="toolbar" aria-label="Pipeline list actions">
         <IconLink icon="add" label="Create new pipeline" href="?page=designer" className="primary" onClick={event => {
           if (onOpenDesigner && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onOpenDesigner(); }
         }} />
@@ -130,28 +136,28 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
         <input ref={importInput} type="file" accept=".json,application/json" hidden onChange={event => void importFile(event)} />
         <IconButton icon="refresh" label="Refresh pipelines" loading={loading} disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
         <IconLink icon="clock" label="Manage schedules" href="?page=schedules" />
-      </section>
-      {message && <p role="status" className="notice">{message}</p>}
-      {runNotice && <p role="status" className="notice">Run {runNotice.id} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(runNotice.pipelineId)}`}>execution logs</a>.</p>}
-      {error && <p role="alert" className="notice error">{error}</p>}
+      </Card>
+      {message && <Alert className="notice">{message}</Alert>}
+      {runNotice && <Alert className="notice">Run {runNotice.id} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(runNotice.pipelineId)}`}>execution logs</a>.</Alert>}
+      {error && <Alert role="alert" variant="destructive" className="notice">{error}</Alert>}
       {loading && <Loading label="Loading pipelines…" />}
       {list && <>
         {list.pipelines.length === 0 ? <p>No pipelines yet. Use + to create one or import a JSON file.</p> : <div className="history-table">
-          <table><caption>Saved pipelines — page {list.page}</caption>
-            <thead><tr><th scope="col">Pipeline</th><th scope="col">Revision</th><th scope="col">Environment</th><th scope="col">Schedules</th><th scope="col">Actions</th></tr></thead>
-            <tbody>{list.pipelines.map(pipeline => <Fragment key={pipeline.id}><tr>
-              <td><strong>{pipeline.name}</strong><p className="muted"><code>{pipeline.id}</code></p></td>
-              <td>{pipeline.revision}</td>
-              <td><select aria-label={`Environment for ${pipeline.name}`} disabled={busy} value={environments[pipeline.id] ?? pipeline.environments[0] ?? ''}
+          <Table><TableCaption>Saved pipelines — page {list.page}</TableCaption>
+            <TableHeader><TableRow><TableHead scope="col">Pipeline</TableHead><TableHead scope="col">Revision</TableHead><TableHead scope="col">Environment</TableHead><TableHead scope="col">Schedules</TableHead><TableHead scope="col">Actions</TableHead></TableRow></TableHeader>
+            <TableBody>{list.pipelines.map(pipeline => <Fragment key={pipeline.id}><TableRow>
+              <TableCell><strong>{pipeline.name}</strong><p className="muted"><code>{pipeline.id}</code></p></TableCell>
+              <TableCell>{pipeline.revision}</TableCell>
+              <TableCell><Select aria-label={`Environment for ${pipeline.name}`} disabled={busy} value={environments[pipeline.id] ?? pipeline.environments[0] ?? ''}
                 onChange={event => setEnvironments(previous => ({ ...previous, [pipeline.id]: event.target.value }))}>
                 {pipeline.environments.map(environment => <option key={environment}>{environment}</option>)}
-              </select></td>
-              <td>{schedulesFor(pipeline.id).length === 0 ? <span className="muted">Manual only</span> : <ul className="compact">
+              </Select></TableCell>
+              <TableCell>{schedulesFor(pipeline.id).length === 0 ? <span className="muted">Manual only</span> : <ul className="compact">
                 {schedulesFor(pipeline.id).map(({ schedule, environments: scheduled }) => <li key={schedule.id}>
-                  <strong>{schedule.alias}</strong> <span className="muted">({scheduled.join(', ')})</span>
+                   <Badge variant="outline">{schedule.alias}</Badge> <span className="muted">({scheduled.join(', ')})</span>
                   <br /><span className="muted">{schedule.nextRuns[0] ? <>Next: <time dateTime={schedule.nextRuns[0]}>{new Date(schedule.nextRuns[0]).toLocaleString()}</time></> : 'Paused'}</span>
-                </li>)}</ul>}</td>
-              <td><div className="actions">
+                </li>)}</ul>}</TableCell>
+              <TableCell><div className="actions">
                 <IconButton icon="play" label={`Run ${pipeline.name}`} disabled={busy || pipeline.environments.length === 0} onClick={() => void run(pipeline)} />
                  <IconButton icon="clock" label={`Schedule ${pipeline.name}`} aria-expanded={expandedScheduleId === pipeline.id} disabled={busy}
                    onClick={() => startScheduling(pipeline)} />
@@ -161,21 +167,25 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
                   if (onOpenDesigner && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onOpenDesigner(pipeline.id); }
                 }} />
                 <IconButton icon="trash" label={`Delete ${pipeline.name}`} className="danger" disabled={busy} onClick={() => setDeleting(pipeline)} />
-              </div></td>
-            </tr>
-            <tr className={`schedule-row${expandedScheduleId === pipeline.id ? ' is-open' : ''}`} aria-hidden={expandedScheduleId !== pipeline.id}>
-              <td colSpan={5}><div className="schedule-disclosure" inert={expandedScheduleId !== pipeline.id}>
+              </div></TableCell>
+            </TableRow>
+            <TableRow className={`schedule-row${expandedScheduleId === pipeline.id ? ' is-open' : ''}`} aria-hidden={expandedScheduleId !== pipeline.id}>
+              <TableCell colSpan={5}><div className="schedule-disclosure" inert={expandedScheduleId !== pipeline.id}>
                 <div className="schedule-disclosure-content">
               {scheduling?.pipelineId === pipeline.id && (schedules.length === 0 ? <p>No schedules exist yet. <a href="?page=schedules">Create a schedule</a> first.</p> :
                 <div className="actions" role="group" aria-label={`Add ${pipeline.name} to a schedule`}>
-                  <label>Schedule<select value={scheduling.alias} onChange={e => selectSchedule(pipeline, e.target.value)}>
+                  <label>Schedule<Select value={scheduling.alias} onChange={e => selectSchedule(pipeline, e.target.value)}>
                     {schedules.map(schedule => <option key={schedule.id} value={schedule.alias}>{schedule.alias} — {describe(schedule.cronExpression)}</option>)}
-                  </select></label>
+                  </Select></label>
                   <fieldset className="environment-choices"><legend>Run in environments</legend>
-                    {pipeline.environments.map(environment => <label key={environment} className="inline">
-                      <input type="checkbox" checked={scheduling.environments.includes(environment)} onChange={e => setScheduling({
-                        ...scheduling, environments: e.target.checked ? [...scheduling.environments, environment] : scheduling.environments.filter(x => x !== environment),
-                      })} />{environment}</label>)}
+                    {pipeline.environments.map(environment => <div key={environment} className="environment-switch">
+                      <span role="presentation" onClick={() => setScheduling({
+                        ...scheduling, environments: scheduling.environments.includes(environment) ? scheduling.environments.filter(x => x !== environment) : [...scheduling.environments, environment],
+                      })}>{environment}</span>
+                      <Switch aria-label={environment} checked={scheduling.environments.includes(environment)} onCheckedChange={checked => setScheduling({
+                        ...scheduling, environments: checked ? [...scheduling.environments, environment] : scheduling.environments.filter(x => x !== environment),
+                      })} />
+                    </div>)}
                   </fieldset>
                   <IconButton icon="save" label={`Save ${pipeline.name} schedule environments`} className="primary"
                     disabled={busy || !scheduling.alias || sameEnvironments(scheduling.environments, attachedEnvironments(scheduling.alias, pipeline.id))}
@@ -183,10 +193,10 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
                   <IconButton icon="cancel" label="Cancel scheduling" disabled={busy} onClick={() => { setExpandedScheduleId(null); setScheduling(null); }} />
                 </div>)}
                 </div>
-              </div></td>
-            </tr>
-            </Fragment>)}</tbody>
-          </table>
+              </div></TableCell>
+            </TableRow>
+            </Fragment>)}</TableBody>
+          </Table>
         </div>}
       </>}
       <nav className="actions history-pagination" aria-label="Pipeline pagination">

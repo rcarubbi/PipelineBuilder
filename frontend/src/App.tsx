@@ -3,10 +3,16 @@ import * as Blockly from 'blockly/core';
 import { BlockEditor, type EditorHandle } from './blockly/BlockEditor';
 import { compileEnvironments, compileWorkspace, getBlockData, restoreEnvironmentBlocks, schemaBefore } from './blockly/workspace';
 import { BlockProperties } from './components/BlockProperties';
-import { IconButton, IconLink } from './components/Icon';
+import { Icon, IconButton, IconLink } from './components/Icon';
 import { PageHeader } from './components/PageHeader';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Loading } from './components/Loading';
+import { Input } from './components/ui/input';
+import { Select } from './components/ui/select';
+import { Button } from './components/ui/button';
+import { Alert } from './components/ui/alert';
+import { Card } from './components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { api } from './pipeline/api';
 import { inferSchemas, type Analysis, type Definition, type Run, type SavedPipeline } from './pipeline/types';
 
@@ -207,10 +213,10 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
   return <>
     <PageHeader page="Designer" />
     <main>
-      <section className="toolbar" aria-label="Pipeline actions">
+      <Card className="toolbar" aria-label="Pipeline actions">
         <IconLink icon="list" label="Back to pipelines" href="/" />
-        <label>Pipeline name<input value={name} onChange={e => { setName(e.target.value); setChangeNumber(n => n + 1); }} /></label>
-        <label>Environment<select value={environment} onChange={e => setEnvironment(e.target.value)}>{availableEnvironments.map(env => <option key={env}>{env}</option>)}</select></label>
+        <label>Pipeline name<Input value={name} onChange={e => { setName(e.target.value); setChangeNumber(n => n + 1); }} /></label>
+        <label>Environment<Select value={environment} onChange={e => setEnvironment(e.target.value)}>{availableEnvironments.map(env => <option key={env}>{env}</option>)}</Select></label>
         <div className="actions">
           <IconButton icon="check" label="Validate" disabled={busy || !definition} onClick={() => void perform(async () => { const result = await api.validate(compileWorkspace(editor.current!.workspace())); setAnalysis(result); setMessage(result.issues.length ? 'Fix the highlighted validation issues.' : 'Pipeline is valid.'); })} />
           <IconButton icon="save" label="Save" disabled={busy || !definition} onClick={() => void perform(async () => { await save(); })} />
@@ -222,29 +228,33 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
           })} />
         </div>
         <span className="muted">Revision {revision} · {dirty ? 'unsaved changes' : 'saved'}</span>
-      </section>
-      {error && <div role="alert" className="notice error">{error}</div>}
-      {designError && <div role="status" className="notice">{designError}</div>}
-      {message && <div role="status" className="notice">{message}</div>}
-      {runNotice && <div role="status" className="notice">Run {runNotice} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(id)}`}>execution logs</a>.</div>}
+      </Card>
+      {error && <Alert role="alert" variant="destructive" className="notice">{error}</Alert>}
+      {designError && <Alert className="notice">{designError}</Alert>}
+      {message && <Alert className="notice">{message}</Alert>}
+      {runNotice && <Alert className="notice">Run {runNotice} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(id)}`}>execution logs</a>.</Alert>}
       <div className={`designer${propertiesOpen ? '' : ' properties-collapsed'}`}>
         <section className="workspace">
-          <div className="view-switch" role="tablist" aria-label="Designer view">
-            <IconButton icon="blocks" label="Canvas" role="tab" aria-selected={view === 'canvas'} aria-controls="designer-canvas" onClick={() => setView('canvas')} />
-            <IconButton icon="code" label="Pipeline JSON (read-only)" role="tab" aria-selected={view === 'json'} aria-controls="designer-json" onClick={() => setView('json')} />
-            <span className="muted">{view === 'canvas' ? 'Canvas' : 'Pipeline JSON · read-only; contains environment values'}</span>
-            <IconButton icon={propertiesOpen ? 'right' : 'left'} className="properties-toggle"
-              label={propertiesOpen ? 'Collapse properties' : 'Expand properties'} aria-expanded={propertiesOpen}
-              aria-controls="designer-properties" onClick={() => setPropertiesOpen(open => !open)} />
-          </div>
+          <Tabs className="designer-tabs" value={view} onValueChange={value => setView(value as 'canvas' | 'json')}>
+            <div className="view-switch">
+              <TabsList aria-label="Designer view">
+                <TabsTrigger value="canvas" aria-label="Canvas"><Icon name="blocks" /></TabsTrigger>
+                <TabsTrigger value="json" aria-label="Pipeline JSON (read-only)"><Icon name="code" /></TabsTrigger>
+              </TabsList>
+              <span className="muted">{view === 'canvas' ? 'Canvas' : 'Pipeline JSON · read-only; contains environment values'}</span>
+              <IconButton icon={propertiesOpen ? 'right' : 'left'} className="properties-toggle"
+                label={propertiesOpen ? 'Collapse properties' : 'Expand properties'} aria-expanded={propertiesOpen}
+                aria-controls="designer-properties" onClick={() => setPropertiesOpen(open => !open)} />
+            </div>
           {/* The canvas stays mounted while hidden so Blockly keeps its state. */}
-          <div id="designer-canvas" className="canvas-panel" role="tabpanel" aria-label="Canvas" hidden={view !== 'canvas'}>
+          <TabsContent value="canvas" forceMount id="designer-canvas" className="canvas-panel" role="tabpanel" aria-label="Canvas" hidden={view !== 'canvas'}>
             <BlockEditor ref={editor} initialWorkspace={initialWorkspace} onChange={refresh} onSelect={setSelectedId}
               onReady={() => { if (pipelineId) savedSignature.current = signature(); refresh(); }} />
-          </div>
-          {view === 'json' && <div id="designer-json" className="json-panel" role="tabpanel" aria-label="Pipeline JSON">
+          </TabsContent>
+          <TabsContent value="json" forceMount id="designer-json" className="json-panel" role="tabpanel" aria-label="Pipeline JSON" hidden={view !== 'json'}>
             <pre className="json-view" tabIndex={0} aria-readonly="true">{definition ? JSON.stringify({ ...definition, environments: workspaceEnvironments }, null, 2) : `Pipeline is incomplete: ${designError}`}</pre>
-          </div>}
+          </TabsContent>
+          </Tabs>
         </section>
         <aside id="designer-properties" aria-label="Properties" aria-hidden={!propertiesOpen} inert={!propertiesOpen}>
           {selected ? <>
@@ -266,7 +276,7 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
           </> : <p>Select a block to edit its properties and inspect its schema.</p>}
         </aside>
       </div>
-      {analysis && analysis.issues.length > 0 && <section aria-label="Validation issues"><h2>Validation issues</h2><ul>{analysis.issues.map((issue, index) => <li key={index}><button onClick={() => { const block = editor.current!.workspace().getBlockById(issue.blockId); block?.select(); setSelectedId(issue.blockId); }}>{issue.message}</button></li>)}</ul></section>}
+      {analysis && analysis.issues.length > 0 && <section aria-label="Validation issues"><h2>Validation issues</h2><ul>{analysis.issues.map((issue, index) => <li key={index}><Button variant="ghost" onClick={() => { const block = editor.current!.workspace().getBlockById(issue.blockId); block?.select(); setSelectedId(issue.blockId); }}>{issue.message}</Button></li>)}</ul></section>}
       {leaveUrl && <ConfirmDialog title="Leave designer?" description="Your unsaved changes will be lost." confirmLabel="Leave without saving" onCancel={() => setLeaveUrl(null)} onConfirm={() => { allowUnload.current = true; window.location.assign(leaveUrl); }} />}
       {deletingBlock && <ConfirmDialog title="Remove step?" description="This step will be removed from the pipeline." confirmLabel="Remove step" onCancel={() => setDeletingBlock(null)} onConfirm={() => { editor.current?.workspace().getBlockById(deletingBlock)?.dispose(true); setDeletingBlock(null); setSelectedId(null); refresh(); }} />}
     </main>

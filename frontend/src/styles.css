@@ -3,9 +3,12 @@
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
   --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-accent: hsl(var(--secondary));
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
@@ -13,6 +16,9 @@
   --color-border: hsl(var(--border));
   --color-ring: hsl(var(--ring));
   --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
 }
 
 :root {
@@ -25,16 +31,21 @@
   --foreground: 222 47% 11%;
   --card: 0 0% 100%;
   --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
   --primary: 221 83% 53%;
   --primary-foreground: 210 40% 98%;
   --secondary: 210 40% 94%;
+  --secondary-foreground: 222 47% 11%;
   --muted: 215 25% 91%;
   --muted-foreground: 215 16% 42%;
   --border: 214 32% 85%;
   --input: 214 32% 85%;
   --ring: 221 83% 53%;
   --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
 }
+@layer components {
 * { box-sizing: border-box; }
 body { margin: 0; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1.3rem 2rem; background: #152341; color: white; }
@@ -77,8 +88,7 @@ main { animation: page-enter .24s ease-out both; }
 @media (prefers-reduced-motion: reduce) {
   .loading-spinner, .button-spinner, .loading-overlay, main, .canvas-panel:not([hidden]), .json-panel, ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
 }
-.confirm-dialog { position: fixed; inset: 0; margin: auto; width: min(440px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; background: hsl(var(--card)); border: 1px solid #d5dbea; border-radius: 12px; padding: 1.5rem; box-shadow: 0 24px 70px #15234140; color: #17233c; }
-.confirm-dialog::backdrop { background: #101b35a8; }
+.confirm-dialog { width: min(440px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; }
 .confirm-dialog h2 { margin: .8rem 0 .4rem; font-size: 1.2rem; }
 .confirm-dialog p { color: #52617a; margin: 0; }
 .dialog-marker { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #fff1ee; color: #a52c21; font-weight: 700; }
@@ -91,20 +101,32 @@ button.dialog-danger:hover { background: #842318; }
   height: clamp(480px, calc(100vh - 220px), 760px); border: 1px solid #b6c1d6; border-radius: 8px; overflow: hidden; background: white;
   transition: grid-template-columns 320ms cubic-bezier(.2, .8, .2, 1); }
 .designer.properties-collapsed { grid-template-columns: minmax(0, 1fr) 0px; }
-.designer aside { min-width: 0; overflow: hidden; transition: padding 320ms ease, opacity 220ms ease, border-color 320ms ease, transform 320ms ease; }
+.designer aside { min-width: 0; overflow-x: hidden; overflow-y: auto; transition: padding 320ms ease, opacity 220ms ease, border-color 320ms ease, transform 320ms ease; }
 .properties-content { display: grid; gap: .75rem; }
 .properties-content > section, .properties-content fieldset { min-width: 0; }
 .properties-content .actions { padding-top: .25rem; }
 .properties-content button, .toolbar button { min-height: 2.5rem; }
 .variable-field { display: grid; gap: .35rem; margin-bottom: .65rem; min-width: 0; }
 .variable-field-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-size: .9rem; }
-.mode-switch { display: inline-flex; gap: .15rem; padding: .15rem; border-radius: .5rem; background: hsl(var(--muted)); }
-.mode-switch button { min-height: 1.8rem !important; padding: .2rem .5rem; border: 0; background: transparent; font-size: .75rem; }
-.mode-switch button[aria-pressed=true] { background: hsl(var(--card)); box-shadow: 0 1px 2px #0f172a20; }
+.mode-switch { display: inline-flex; align-items: center; gap: .15rem; padding: .15rem; border-radius: .6rem; background: hsl(var(--muted)); }
+.mode-switch button { min-height: 1.8rem; padding: .2rem .55rem; border-radius: .4rem; font-size: .75rem; }
+.ui-switch { position: relative; display: inline-flex; width: 2.25rem; height: 1.25rem; min-height: 1.25rem; flex: none; align-items: center; padding: 2px; border: 0; border-radius: 9999px; background: #cbd5e1; cursor: pointer; transition: background-color 180ms ease; }
+.ui-switch[data-state="checked"] { background: hsl(var(--primary)); }
+.ui-switch-thumb { display: block; width: 1rem; height: 1rem; flex: none; border-radius: 9999px; background: white; box-shadow: 0 1px 3px #0f172a40; transform: translateX(0); transition: transform 180ms ease; }
+.ui-switch[data-state="checked"] .ui-switch-thumb { transform: translateX(1rem); }
+.properties-content button.ui-switch, .toolbar button.ui-switch { min-height: 1.25rem; }
+.variable-mode-panel { display: grid; grid-template-rows: 0fr; opacity: 0; transform: translateY(-4px); transition: grid-template-rows 260ms cubic-bezier(.2, .8, .2, 1), opacity 180ms ease, transform 260ms ease; }
+.variable-mode-panel.is-active { grid-template-rows: 1fr; opacity: 1; transform: translateY(0); }
+.variable-mode-content { min-height: 0; overflow: hidden; }
+.switch-field, .environment-switch { display: inline-flex; align-items: center; justify-content: space-between; gap: .65rem; min-height: 2rem; }
+.switch-field { width: 100%; }
+.switch-field > span, .environment-switch > span { cursor: pointer; }
 .field-control { margin: 0; }
-.designer.properties-collapsed aside { padding: 0; opacity: 0; border-color: transparent; transform: translateX(12px); }
+.designer.properties-collapsed aside { padding: 0; opacity: 0; overflow: hidden; border-color: transparent; transform: translateX(12px); }
 .properties-toggle { margin-left: auto; }
 .workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.designer-tabs { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
+.designer-tabs > [role="tabpanel"] { min-height: 0; flex: 1; }
 .canvas-panel, .json-panel { flex: 1; min-height: 0; }
 [hidden] { display: none !important; }
 .canvas { height: 100%; width: 100%; }
@@ -138,7 +160,7 @@ code { overflow-wrap: anywhere; }
 .panel { background: white; padding: 1rem; border: 1px solid #b6c1d6; border-radius: 8px; }
 .panel h2 { margin-top: 0; }
 .weekday-picker { display: flex; flex-wrap: wrap; gap: .25rem .75rem; }
-.weekday-picker label { margin: 0; }
+.weekday-picker .switch-field { width: auto; }
 .schedule-preview { background: #f3f6fc; border-left: 4px solid #244fc8; padding: .5rem .8rem; margin: .7rem 0; }
 .schedule-preview p, .schedule-preview ol { margin: .3rem 0; }
 .field-error { color: #991b1b; }
@@ -165,11 +187,13 @@ ul.compact, ol.compact { margin: 0; padding-left: 1.1rem; }
 .schedule-disclosure-content { min-height: 0; overflow: hidden; }
 .schedule-row label { margin: 0; min-width: 220px; }
 .environment-choices { display: flex; flex-wrap: wrap; gap: .25rem .9rem; margin: 0; }
-.environment-choices label { min-width: 0; }
+.environment-choices { align-items: center; }
+.environment-switch { margin: .25rem .75rem .25rem 0; }
 @media (max-width: 1000px) { main { padding: 1rem; } .designer, .schedule-layout { grid-template-columns: minmax(0, 1fr); }
   .designer { height: auto; grid-template-rows: auto; } .canvas-panel, .json-panel { height: 480px; flex: none; }
   .designer.properties-collapsed { grid-template-columns: minmax(0, 1fr); }
   .designer aside { max-height: min(70vh, 800px); transition: max-height 320ms ease, padding 320ms ease, opacity 220ms ease, border-color 320ms ease; }
   .designer.properties-collapsed aside { max-height: 0; border-width: 0; }
   aside { border-left: 0; border-top: 1px solid #b6c1d6; } header { padding: 1rem; flex-wrap: wrap; } }
-@media (prefers-reduced-motion: reduce) { .designer, .designer aside, .schedule-disclosure, .schedule-row td { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .designer, .designer aside, .schedule-disclosure, .schedule-row td, .variable-mode-panel, .ui-switch, .ui-switch-thumb { transition: none; } }
+}

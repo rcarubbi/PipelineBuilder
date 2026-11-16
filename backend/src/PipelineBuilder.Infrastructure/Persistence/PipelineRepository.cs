@@ -69,7 +69,8 @@ public sealed class PipelineRepository(PipelineDbContext db) : IPipelineReposito
     public async Task<ClaimedRunRecord?> ClaimNext(CancellationToken ct)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        var run = await db.Runs.FromSqlRaw("SELECT * FROM \"Runs\" WHERE \"Status\" = 'Queued' ORDER BY \"CreatedAt\" LIMIT 1 FOR UPDATE SKIP LOCKED").FirstOrDefaultAsync(ct);
+        var runs = await db.Runs.FromSqlRaw("SELECT * FROM \"Runs\" WHERE \"Status\" = 'Queued' ORDER BY \"CreatedAt\" LIMIT 1 FOR UPDATE SKIP LOCKED").ToArrayAsync(ct);
+        var run = runs.FirstOrDefault();
         if (run is null) return null;
         run.Status = "Running";
         run.StartedAt = DateTimeOffset.UtcNow;

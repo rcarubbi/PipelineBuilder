@@ -450,7 +450,8 @@ internal static class ApiInputReader
     private static Uri? JsonNext(JsonNode? root, string path, Uri current)
     {
         var value = Navigate(root, path);
-        return Uri.TryCreate(current, value is null ? null : Scalar(value), out var uri) ? uri : null;
+        if (value is null) return null;
+        return Uri.TryCreate(current, Scalar(value), out var uri) ? uri : null;
     }
     private static Uri? XmlNext(XDocument root, string path, Uri current)
     {

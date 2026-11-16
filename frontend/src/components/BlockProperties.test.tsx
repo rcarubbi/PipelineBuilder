@@ -17,8 +17,11 @@ it('selects a discovered nested API data path and refreshes its schema sample', 
     const user = userEvent.setup();
 
     await user.selectOptions(screen.getByLabelText('Discovered response paths'), 'payload.items');
-    await user.click(within(screen.getByRole('group', { name: 'Method mode' })).getByRole('button', { name: 'Variable' }));
+    const methodMode = screen.getByRole('group', { name: 'Method mode' });
+    expect(methodMode.closest('.variable-field')).toHaveAttribute('data-mode', 'value');
+    await user.click(within(methodMode).getByRole('button', { name: 'Variable' }));
     rerender(<BlockProperties block={block} inputSchema={[]} onChange={onChange} onDiscover={discover} />);
+    expect(methodMode.closest('.variable-field')).toHaveAttribute('data-mode', 'variable');
     fireEvent.change(screen.getByLabelText('Method variable'), { target: { value: '${var.API_METHOD}' } });
     await user.click(within(screen.getByRole('group', { name: 'Link rel=next header mode' })).getByRole('button', { name: 'Variable' }));
     rerender(<BlockProperties block={block} inputSchema={[]} onChange={onChange} onDiscover={discover} />);

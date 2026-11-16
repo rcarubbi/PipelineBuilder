@@ -1,5 +1,5 @@
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes } from 'react';
-import { Button } from './ui/button';
+import type { AnchorHTMLAttributes } from 'react';
+import { Button, type ButtonProps } from './ui/button';
 
 const paths = {
   add: 'M12 5v14M5 12h14',
@@ -36,10 +36,12 @@ export function Icon({ name }: { name: IconName }) {
   </svg>;
 }
 
-export function IconButton({ icon, label, className = '', loading = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { icon: IconName; label: string; loading?: boolean }) {
-  return <Button type="button" size="icon" className={`icon-button ${className}`} title={label} aria-label={label} aria-busy={loading || undefined} {...props}>{loading ? <span className="button-spinner" aria-hidden="true" /> : <Icon name={icon} />}</Button>;
+export function IconButton({ icon, label, className = '', loading = false, variant, ...props }: Omit<ButtonProps, 'asChild' | 'children'> & { icon: IconName; label: string; loading?: boolean }) {
+  const intent = variant ?? (className.split(/\s+/).includes('danger') ? 'destructive' : className.split(/\s+/).includes('primary') ? 'default' : 'outline');
+  return <Button type="button" size="icon" variant={intent} className={`icon-button ${className}`} title={label} aria-label={label} aria-busy={loading || undefined} {...props}>{loading ? <span className="button-spinner" aria-hidden="true" /> : <Icon name={icon} />}</Button>;
 }
 
 export function IconLink({ icon, label, className = '', ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { icon: IconName; label: string }) {
-  return <Button asChild size="icon" className={`icon-button ${className}`}><a title={label} aria-label={label} {...props}><Icon name={icon} /></a></Button>;
+  const variant = className.split(/\s+/).includes('primary') ? 'default' : 'outline';
+  return <Button asChild size="icon" variant={variant} className={`icon-button ${className}`}><a title={label} aria-label={label} {...props}><Icon name={icon} /></a></Button>;
 }

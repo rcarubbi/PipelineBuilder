@@ -168,9 +168,9 @@ it('adds the same pipeline to one schedule in several environments and shows the
   await user.click(screen.getByRole('button', { name: 'Schedule Customers' }));
   const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
   expect(form.getByRole('option', { name: 'weekday-morning — Every weekday at 08:30 UTC' })).toBeInTheDocument();
-  expect(form.getByRole('checkbox', { name: 'development' })).toBeChecked();
-  expect(form.getByRole('checkbox', { name: 'test' })).not.toBeChecked();
-  await user.click(form.getByRole('checkbox', { name: 'test' }));
+  expect(form.getByRole('switch', { name: 'development' })).toBeChecked();
+  expect(form.getByRole('switch', { name: 'test' })).not.toBeChecked();
+  await user.click(form.getByRole('switch', { name: 'test' }));
   vi.mocked(api.schedules).mockResolvedValue({ schedules: [{ ...schedule, nextRuns: [nextRun], pipelines: links }] });
   await user.click(form.getByRole('button', { name: 'Save Customers schedule environments' }));
 
@@ -190,7 +190,7 @@ it('collapses and reopens the schedule editor without losing the current draft',
   const toggle = screen.getByRole('button', { name: 'Schedule Customers' });
   await user.click(toggle);
   const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
-  await user.click(form.getByRole('checkbox', { name: 'test' }));
+  await user.click(form.getByRole('switch', { name: 'test' }));
 
   await user.click(toggle);
   expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -198,7 +198,7 @@ it('collapses and reopens the schedule editor without losing the current draft',
 
   await user.click(toggle);
   expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  expect(within(screen.getByRole('group', { name: 'Add Customers to a schedule' })).getByRole('checkbox', { name: 'test' })).toBeChecked();
+  expect(within(screen.getByRole('group', { name: 'Add Customers to a schedule' })).getByRole('switch', { name: 'test' })).toBeChecked();
 });
 
 it('shows existing environments for a schedule and removes only the unchecked one', async () => {
@@ -212,10 +212,10 @@ it('shows existing environments for a schedule and removes only the unchecked on
   await user.click(screen.getByRole('button', { name: 'Schedule Customers' }));
   const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
   const save = form.getByRole('button', { name: 'Save Customers schedule environments' });
-  expect(form.getByRole('checkbox', { name: 'development' })).toBeChecked();
-  expect(form.getByRole('checkbox', { name: 'test' })).toBeChecked();
+  expect(form.getByRole('switch', { name: 'development' })).toBeChecked();
+  expect(form.getByRole('switch', { name: 'test' })).toBeChecked();
   expect(save).toBeDisabled();
-  await user.click(form.getByRole('checkbox', { name: 'development' }));
+  await user.click(form.getByRole('switch', { name: 'development' }));
   await user.click(save);
 
   expect(api.detachSchedule).toHaveBeenCalledExactlyOnceWith('weekday-morning', 'pipeline-1', 'development');

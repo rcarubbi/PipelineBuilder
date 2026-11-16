@@ -4,6 +4,13 @@ import { PageHeader } from '../components/PageHeader';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Loading } from '../components/Loading';
 import { api } from '../pipeline/api';
+import { Input } from '../components/ui/input';
+import { Select } from '../components/ui/select';
+import { Card } from '../components/ui/card';
+import { Alert } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { SwitchField } from '../components/ui/switch-field';
 import type { Schedule, ScheduledPipeline } from '../pipeline/types';
 import {
   defaultSettings, describe, formatTime, fromCron, maxDayOfMonth, minuteIntervals, toCron, validateSettings, weekdays,
@@ -95,38 +102,38 @@ export function SchedulesPage() {
   return <>
     <PageHeader page="Schedules" />
     <main>
-      <section className="toolbar" aria-label="Schedule actions">
+      <Card className="toolbar" aria-label="Schedule actions">
         <IconLink icon="list" label="Back to pipelines" href="/" />
         <IconButton icon="refresh" label="Refresh schedules" loading={loading} disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
         <p className="muted">Schedules run in UTC. Attach pipelines from the pipeline list. Runs missed while the server is offline are skipped.</p>
-      </section>
-      {message && <p role="status" className="notice">{message}</p>}
-      {error && <p role="alert" className="notice error">{error}</p>}
+      </Card>
+      {message && <Alert className="notice">{message}</Alert>}
+      {error && <Alert role="alert" variant="destructive" className="notice">{error}</Alert>}
       <div className="schedule-layout">
-        <section className="panel" aria-label="Schedule editor">
+        <Card className="panel" aria-label="Schedule editor">
           <h2>{editing ? `Edit ${draft.alias}` : 'New schedule'}</h2>
-          <label>Alias<input value={draft.alias} maxLength={64} placeholder="e.g. weekday-morning" onChange={e => setDraft({ ...draft, alias: e.target.value })} /></label>
-          <label className="inline"><input type="checkbox" checked={draft.advanced} onChange={e => setAdvanced(e.target.checked)} />Edit cron expression directly</label>
-          {draft.advanced ? <label>Cron expression (UTC)<input value={draft.cron} spellCheck={false} placeholder="minute hour day month weekday" onChange={e => setDraft({ ...draft, cron: e.target.value })} /></label> : <>
-            <label>Repeat<select value={settings.frequency} onChange={e => update({ frequency: e.target.value as Frequency })}>
+          <label>Alias<Input value={draft.alias} maxLength={64} placeholder="e.g. weekday-morning" onChange={e => setDraft({ ...draft, alias: e.target.value })} /></label>
+          <SwitchField label="Edit cron expression directly" checked={draft.advanced} onCheckedChange={setAdvanced} />
+          {draft.advanced ? <label>Cron expression (UTC)<Input value={draft.cron} spellCheck={false} placeholder="minute hour day month weekday" onChange={e => setDraft({ ...draft, cron: e.target.value })} /></label> : <>
+            <label>Repeat<Select value={settings.frequency} onChange={e => update({ frequency: e.target.value as Frequency })}>
               {frequencies.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select></label>
-            {settings.frequency === 'minutes' && <label>Interval<select value={settings.interval} onChange={e => update({ interval: Number(e.target.value) })}>
+            </Select></label>
+            {settings.frequency === 'minutes' && <label>Interval<Select value={settings.interval} onChange={e => update({ interval: Number(e.target.value) })}>
               {minuteIntervals.map(n => <option key={n} value={n}>{n === 1 ? 'Every minute' : `Every ${n} minutes`}</option>)}
-            </select></label>}
-            {settings.frequency === 'hourly' && <label>At minute<input type="number" min={0} max={59} value={settings.minute}
+            </Select></label>}
+            {settings.frequency === 'hourly' && <label>At minute<Input type="number" min={0} max={59} value={settings.minute}
               onChange={e => update({ minute: Math.min(59, Math.max(0, Number(e.target.value) || 0)) })} /></label>}
-            {['daily', 'weekly', 'monthly'].includes(settings.frequency) && <label>Time (UTC)<input type="time" required value={formatTime(settings.hour, settings.minute)}
+            {['daily', 'weekly', 'monthly'].includes(settings.frequency) && <label>Time (UTC)<Input type="time" required value={formatTime(settings.hour, settings.minute)}
               onChange={e => { const [hour, minute] = e.target.value.split(':').map(Number); if (!Number.isNaN(hour) && !Number.isNaN(minute)) update({ hour, minute }); }} /></label>}
             {settings.frequency === 'weekly' && <fieldset><legend>Days</legend><div className="weekday-picker">
-              {weekdays.map((day, index) => <label key={day} className="inline"><input type="checkbox" checked={settings.days.includes(index)}
-                onChange={e => update({ days: e.target.checked ? [...settings.days, index] : settings.days.filter(d => d !== index) })} />{day.slice(0, 3)}</label>)}
+              {weekdays.map((day, index) => <SwitchField key={day} label={day.slice(0, 3)} checked={settings.days.includes(index)}
+                onCheckedChange={checked => update({ days: checked ? [...settings.days, index] : settings.days.filter(d => d !== index) })} />)}
             </div></fieldset>}
-            {settings.frequency === 'monthly' && <label>Day of month<select value={settings.dayOfMonth} onChange={e => update({ dayOfMonth: Number(e.target.value) })}>
+            {settings.frequency === 'monthly' && <label>Day of month<Select value={settings.dayOfMonth} onChange={e => update({ dayOfMonth: Number(e.target.value) })}>
               {Array.from({ length: maxDayOfMonth }, (_, i) => i + 1).map(day => <option key={day} value={day}>{day}</option>)}
-            </select></label>}
+            </Select></label>}
           </>}
-          <label className="inline"><input type="checkbox" checked={draft.isEnabled} onChange={e => setDraft({ ...draft, isEnabled: e.target.checked })} />Enabled</label>
+          <SwitchField label="Enabled" checked={draft.isEnabled} onCheckedChange={isEnabled => setDraft({ ...draft, isEnabled })} />
           <div className="schedule-preview" aria-live="polite">
             <p><strong>{describe(cronExpression)}</strong></p>
             <p>Cron: <code>{cronExpression || '—'}</code></p>
@@ -140,29 +147,29 @@ export function SchedulesPage() {
               disabled={busy || !draft.alias.trim() || !!preview.error || !cronExpression} onClick={() => void save()} />
             {editing && <IconButton icon="cancel" label="Cancel editing" disabled={busy} onClick={() => setDraft(newDraft())} />}
           </div>
-        </section>
+        </Card>
         <section aria-label="Schedules">
           {loading && <Loading label="Loading schedules…" />}
           {schedules?.length === 0 && <p>No schedules yet. Create one with the editor.</p>}
-          {!!schedules?.length && <div className="history-table"><table>
-            <caption>Schedules</caption>
-            <thead><tr><th scope="col">Alias</th><th scope="col">When</th><th scope="col">Next runs</th><th scope="col">Pipelines</th><th scope="col">Actions</th></tr></thead>
-            <tbody>{schedules.map(schedule => <tr key={schedule.id}>
-              <td><strong>{schedule.alias}</strong><p className="muted">{schedule.isEnabled ? 'Enabled' : 'Disabled'}</p></td>
-              <td>{describe(schedule.cronExpression)}<p><code>{schedule.cronExpression}</code></p></td>
-              <td>{schedule.nextRuns.length ? <ol className="compact">{schedule.nextRuns.map(run => <li key={run}><time dateTime={run}>{formatRun(run)}</time></li>)}</ol>
-                : <span className="muted">{schedule.isEnabled ? 'Not scheduled: no pipelines' : 'Paused'}</span>}</td>
-              <td>{schedule.pipelines.length === 0 ? <span className="muted">None</span> : <ul className="compact">{schedule.pipelines.map(p => <li key={`${p.pipelineId}/${p.environment}`} className="chip">
+          {!!schedules?.length && <div className="history-table"><Table>
+            <TableCaption>Schedules</TableCaption>
+            <TableHeader><TableRow><TableHead scope="col">Alias</TableHead><TableHead scope="col">When</TableHead><TableHead scope="col">Next runs</TableHead><TableHead scope="col">Pipelines</TableHead><TableHead scope="col">Actions</TableHead></TableRow></TableHeader>
+            <TableBody>{schedules.map(schedule => <TableRow key={schedule.id}>
+              <TableCell><strong>{schedule.alias}</strong><p className="muted"><Badge variant={schedule.isEnabled ? 'secondary' : 'outline'}>{schedule.isEnabled ? 'Enabled' : 'Disabled'}</Badge></p></TableCell>
+              <TableCell>{describe(schedule.cronExpression)}<p><code>{schedule.cronExpression}</code></p></TableCell>
+              <TableCell>{schedule.nextRuns.length ? <ol className="compact">{schedule.nextRuns.map(run => <li key={run}><time dateTime={run}>{formatRun(run)}</time></li>)}</ol>
+                : <span className="muted">{schedule.isEnabled ? 'Not scheduled: no pipelines' : 'Paused'}</span>}</TableCell>
+              <TableCell>{schedule.pipelines.length === 0 ? <span className="muted">None</span> : <ul className="compact">{schedule.pipelines.map(p => <li key={`${p.pipelineId}/${p.environment}`} className="chip">
                 {p.pipelineName} <span className="muted">({p.environment})</span>
                 <IconButton icon="unlink" label={`Remove ${p.pipelineName} (${p.environment}) from ${schedule.alias}`} disabled={busy} onClick={() => detach(schedule, p)} />
-              </li>)}</ul>}</td>
-              <td><div className="actions">
+              </li>)}</ul>}</TableCell>
+              <TableCell><div className="actions">
                 <IconButton icon="edit" label={`Edit ${schedule.alias}`} disabled={busy} onClick={() => edit(schedule)} />
                 <IconButton icon="trash" label={`Delete ${schedule.alias}`} className="danger" disabled={busy || schedule.pipelines.length > 0}
                   title={schedule.pipelines.length > 0 ? 'Remove attached pipelines before deleting' : undefined} onClick={() => setDeleting(schedule)} />
-              </div></td>
-            </tr>)}</tbody>
-          </table></div>}
+              </div></TableCell>
+            </TableRow>)}</TableBody>
+          </Table></div>}
         </section>
       </div>
       {deleting && <ConfirmDialog title={`Delete schedule ${deleting.alias}?`} description="This schedule will be permanently removed." confirmLabel="Delete schedule" onCancel={() => setDeleting(null)} onConfirm={() => { const schedule = deleting; setDeleting(null); remove(schedule); }} />}

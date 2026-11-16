@@ -162,7 +162,7 @@ it('switches between the canvas and a read-only executable JSON view without los
 
   expect(jsonTab).toHaveAttribute('aria-selected', 'true');
   expect(document.getElementById('designer-canvas')).toHaveAttribute('hidden');
-  const json = within(screen.getByRole('tabpanel', { name: 'Pipeline JSON' }));
+  const json = within(screen.getByRole('tabpanel', { name: 'Pipeline JSON (read-only)' }));
   const view = json.getByText(/"formatVersion": 1/);
   expect(JSON.parse(view.textContent!)).toEqual({ ...saved.document.definition, environments: saved.document.environments });
   expect(view.tagName).toBe('PRE');
