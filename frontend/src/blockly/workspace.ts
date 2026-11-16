@@ -20,6 +20,7 @@ Blockly.common.defineBlocksWithJsonArray([
     { type: 'field_checkbox', name: 'HEADER', checked: true },
   ], previousStatement: 'Pipeline', colour: 20 },
   { type: 'pipeline_parquetInput', message0: 'Read Parquet %1', args0: [{ type: 'input_value', name: 'PATH', check: 'String' }], nextStatement: 'Pipeline', colour: 165 },
+  { type: 'pipeline_apiInput', message0: 'Fetch API', nextStatement: 'Pipeline', colour: 165, tooltip: 'Fetch JSON or XML data into rows.' },
   { type: 'pipeline_excelInput', message0: 'Read Excel %1 sheet %2 header %3', args0: [
     { type: 'input_value', name: 'PATH', check: 'String' }, { type: 'field_input', name: 'SHEET', text: 'Sheet1' },
     { type: 'field_checkbox', name: 'HEADER', checked: true },
@@ -57,7 +58,7 @@ Blockly.common.defineBlocksWithJsonArray([
 
 export const toolbox = {
   kind: 'categoryToolbox', contents: [
-    { kind: 'category', name: 'Input', colour: '165', contents: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput'].map(type => ({ kind: 'block', type })) },
+    { kind: 'category', name: 'Input', colour: '165', contents: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'].map(type => ({ kind: 'block', type })) },
     { kind: 'category', name: 'Processing', colour: '230', contents: ['pipeline_map', 'pipeline_filter'].map(type => ({ kind: 'block', type })) },
     { kind: 'category', name: 'Criteria', colour: '285', contents: ['predicate_compare', 'predicate_logic', 'predicate_not', 'predicate_null'].map(type => ({ kind: 'block', type })) },
     { kind: 'category', name: 'Values', colour: '160', contents: ['value_literal', 'value_concat', 'value_utc', 'value_current_environment', 'value_environment', 'define_environment'].map(type => ({ kind: 'block', type })) },
@@ -66,7 +67,7 @@ export const toolbox = {
   ],
 };
 
-export function getBlockData(block: Blockly.Block): { schema?: Column[]; mappings?: Mapping[] } {
+export function getBlockData(block: Blockly.Block): { schema?: Column[]; mappings?: Mapping[]; api?: Record<string, unknown>; hasHeaderVariable?: string; predicate?: Record<string, unknown> } {
   const data = block.data ? JSON.parse(block.data) : {};
   if (!data || typeof data !== 'object') throw new Error('Invalid block configuration.');
   return data;
@@ -79,7 +80,7 @@ export function schemaBefore(block: Blockly.Block): Column[] {
   for (let cursor = step.getPreviousBlock(); cursor; cursor = cursor.getPreviousBlock()) previous.unshift(cursor);
   let schema: Column[] = [];
   for (const cursor of previous) {
-    if (['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput'].includes(cursor.type)) schema = getBlockData(cursor).schema ?? [];
+    if (['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'].includes(cursor.type)) schema = getBlockData(cursor).schema ?? [];
     if (cursor.type === 'pipeline_map') schema = (getBlockData(cursor).mappings ?? []).map(m => m.target);
   }
   return schema;
@@ -91,7 +92,7 @@ function validColumn(column: Column): boolean {
 
 export function compileWorkspace(workspace: Blockly.Workspace): Definition {
   const roots = workspace.getTopBlocks(false);
-  const inputTypes = ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput'];
+  const inputTypes = ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'];
   const pipelines = roots.filter(block => inputTypes.includes(block.type));
   if (pipelines.length !== 1 || roots.some(block => ![...inputTypes, 'define_variable', 'define_environment', 'variables_set'].includes(block.type))) throw new Error('Connect all blocks into one pipeline chain starting with an input, or use variable assignment blocks.');
   const assignments: Blockly.Block[] = [];
@@ -109,7 +110,7 @@ export function compileWorkspace(workspace: Blockly.Workspace): Definition {
       case 'pipeline_csv': {
         const schema = getBlockData(block).schema;
         if (!schema?.length || !schema.every(validColumn)) throw new Error('Define or discover the CSV schema first.');
-        steps.push({ type: 'csv', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), delimiter: block.getFieldValue('DELIMITER'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', schema });
+        steps.push({ type: 'csv', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), delimiter: block.getFieldValue('DELIMITER'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', ...(getBlockData(block).hasHeaderVariable ? { hasHeaderVariable: getBlockData(block).hasHeaderVariable } : {}), schema });
         break;
       }
       case 'pipeline_parquetInput':
@@ -118,7 +119,28 @@ export function compileWorkspace(workspace: Blockly.Workspace): Definition {
         if (!schema?.length || !schema.every(validColumn)) throw new Error('Define the input schema first.');
         const common = { id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), schema };
         if (block.type === 'pipeline_parquetInput') steps.push({ type: 'parquetInput', ...common });
-        else steps.push({ type: 'excelInput', ...common, sheet: block.getFieldValue('SHEET'), hasHeader: block.getFieldValue('HEADER') === 'TRUE' });
+        else steps.push({ type: 'excelInput', ...common, sheet: block.getFieldValue('SHEET'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', ...(getBlockData(block).hasHeaderVariable ? { hasHeaderVariable: getBlockData(block).hasHeaderVariable } : {}) });
+        break;
+      }
+      case 'pipeline_apiInput': {
+        const config = getBlockData(block);
+        const api = config.api ?? {};
+        const schema = config.schema;
+        if (!schema?.length || !schema.every(validColumn)) throw new Error('Define or discover the API schema first.');
+        steps.push({
+          type: 'apiInput', id: block.id, schema,
+          url: String(api.url ?? ''), dataPath: String(api.dataPath ?? ''),
+          method: String(api.methodVariable || api.method || 'GET'),
+          format: String(api.formatVariable || api.format || 'auto'),
+          authentication: String(api.authenticationVariable || api.authentication || 'none'),
+          username: String(api.username ?? ''), password: String(api.password ?? ''), token: String(api.token ?? ''),
+          apiKeyName: String(api.apiKeyName ?? ''), apiKey: String(api.apiKey ?? ''),
+          oauthTokenUrl: String(api.oauthTokenUrl ?? ''), clientId: String(api.clientId ?? ''),
+          clientSecret: String(api.clientSecret ?? ''), scope: String(api.scope ?? ''),
+          nextPath: String(api.nextPath ?? ''), useLinkHeader: Boolean(api.useLinkHeader),
+          ...(api.useLinkHeaderVariable ? { useLinkHeaderVariable: String(api.useLinkHeaderVariable) } : {}),
+          body: String(api.body ?? ''), headers: api.headers as Record<string, string> ?? {},
+        });
         break;
       }
       case 'pipeline_map': {
@@ -129,8 +151,8 @@ export function compileWorkspace(workspace: Blockly.Workspace): Definition {
       }
       case 'pipeline_filter': steps.push({ type: 'filter', id: block.id, criteria: compilePredicate(block.getInputTargetBlock('CRITERIA'), 0) }); break;
       case 'pipeline_parquet': steps.push({ type: 'parquet', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')) }); break;
-      case 'pipeline_csvOutput': steps.push({ type: 'csvOutput', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), delimiter: block.getFieldValue('DELIMITER'), hasHeader: block.getFieldValue('HEADER') === 'TRUE' }); break;
-      case 'pipeline_excelOutput': steps.push({ type: 'excelOutput', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), sheet: block.getFieldValue('SHEET'), hasHeader: block.getFieldValue('HEADER') === 'TRUE' }); break;
+      case 'pipeline_csvOutput': steps.push({ type: 'csvOutput', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), delimiter: block.getFieldValue('DELIMITER'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', ...(getBlockData(block).hasHeaderVariable ? { hasHeaderVariable: getBlockData(block).hasHeaderVariable } : {}) }); break;
+      case 'pipeline_excelOutput': steps.push({ type: 'excelOutput', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), sheet: block.getFieldValue('SHEET'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', ...(getBlockData(block).hasHeaderVariable ? { hasHeaderVariable: getBlockData(block).hasHeaderVariable } : {}) }); break;
       case 'variables_set': assignments.push(block); break;
       default: throw new Error(`Unsupported block '${block.type}'.`);
     }
@@ -166,6 +188,10 @@ function variableName(block: Blockly.Block): string {
   return variable.getName();
 }
 
+function isVariableReference(value: string): boolean {
+  return /\$\{(?:(?:var|env|secret)\.)?[A-Za-z_][A-Za-z0-9_]*\}/.test(value);
+}
+
 export function compileEnvironments(workspace: Blockly.Workspace): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = Object.create(null);
   for (const block of workspace.getTopBlocks(false).filter(b => b.type === 'define_environment')) {
@@ -176,16 +202,44 @@ export function compileEnvironments(workspace: Blockly.Workspace): Record<string
     if (Object.hasOwn(values, name)) throw new Error(`Duplicate environment variable '${name}' in '${environment}'.`);
     values[name] = block.getFieldValue('VALUE');
   }
-  if (!Object.keys(result).length) result.development = {};
   return result;
+}
+
+/** Migrates environment values from older pipeline documents into editable Blockly declaration blocks. */
+export function restoreEnvironmentBlocks(
+  workspaceState: Record<string, unknown>,
+  environments: Record<string, Record<string, string>>,
+): Record<string, unknown> {
+  const restored = structuredClone(workspaceState);
+  const serializedBlocks = (restored.blocks ??= { languageVersion: 0, blocks: [] }) as { languageVersion?: number; blocks?: Record<string, unknown>[] };
+  serializedBlocks.languageVersion ??= 0;
+  serializedBlocks.blocks ??= [];
+  const blocks = serializedBlocks.blocks;
+  const declared = new Set(blocks.filter(block => block.type === 'define_environment').map(block => {
+    const fields = block.fields as Record<string, string> | undefined;
+    return `${fields?.ENVIRONMENT}\0${fields?.NAME}`;
+  }));
+  const usedIds = new Set(blocks.map(block => block.id).filter((id): id is string => typeof id === 'string'));
+  let index = 0;
+  for (const [environment, values] of Object.entries(environments)) for (const [name, value] of Object.entries(values)) {
+    const key = `${environment}\0${name}`;
+    if (declared.has(key)) continue;
+    let id: string;
+    do { id = `restored-environment-${++index}`; } while (usedIds.has(id));
+    usedIds.add(id);
+    declared.add(key);
+    blocks.push({ type: 'define_environment', id, x: 40 + index * 20, y: 40 + index * 20,
+      fields: { ENVIRONMENT: environment, NAME: name, VALUE: value } });
+  }
+  return restored;
 }
 
 function compilePredicate(block: Blockly.Block | null, depth: number): Predicate {
   if (!block) throw new Error('Connect a boolean criterion to every filter and expression socket.');
   if (depth >= 12) throw new Error('Filter expressions cannot exceed 12 levels.');
   switch (block.type) {
-    case 'predicate_compare': return { kind: 'compare', column: block.getFieldValue('COLUMN'), operator: block.getFieldValue('OP') as ComparisonOperator, value: block.getFieldValue('VALUE'), ...(block.getInputTargetBlock('COLUMN_EXPRESSION') ? { columnExpression: compileText(block.getInputTargetBlock('COLUMN_EXPRESSION')) } : {}), ...(block.getInputTargetBlock('VALUE_EXPRESSION') ? { valueExpression: compileText(block.getInputTargetBlock('VALUE_EXPRESSION')) } : {}) };
-    case 'predicate_null': return { kind: 'null', column: block.getFieldValue('COLUMN'), isNull: block.getFieldValue('IS_NULL') === 'TRUE' };
+    case 'predicate_compare': return { kind: 'compare', column: block.getFieldValue('COLUMN'), operator: block.getFieldValue('OP') as ComparisonOperator, value: block.getFieldValue('VALUE'), ...(block.getInputTargetBlock('COLUMN_EXPRESSION') ? { columnExpression: compileText(block.getInputTargetBlock('COLUMN_EXPRESSION')) } : {}), ...(block.getInputTargetBlock('VALUE_EXPRESSION') ? { valueExpression: compileText(block.getInputTargetBlock('VALUE_EXPRESSION')) } : {}), ...(getBlockData(block).predicate?.operatorVariable ? { operatorVariable: String(getBlockData(block).predicate!.operatorVariable) } : {}) };
+    case 'predicate_null': return { kind: 'null', column: block.getFieldValue('COLUMN'), isNull: block.getFieldValue('IS_NULL') === 'TRUE', ...(getBlockData(block).predicate?.isNullVariable ? { isNullVariable: String(getBlockData(block).predicate!.isNullVariable) } : {}) };
     case 'predicate_logic': return { kind: 'logical', operator: block.getFieldValue('OP') as 'and' | 'or', children: [compilePredicate(block.getInputTargetBlock('LEFT'), depth + 1), compilePredicate(block.getInputTargetBlock('RIGHT'), depth + 1)] };
     case 'predicate_not': return { kind: 'logical', operator: 'not', children: [compilePredicate(block.getInputTargetBlock('VALUE'), depth + 1)] };
     default: throw new Error('Unsupported boolean expression.');
@@ -231,8 +285,8 @@ export function definitionToWorkspace(definition: Definition): Record<string, un
       return candidate;
     };
     switch (predicate.kind) {
-      case 'compare': return { type: 'predicate_compare', id: id(), fields: { COLUMN: predicate.column, OP: predicate.operator, VALUE: predicate.value }, inputs: { ...(predicate.columnExpression ? { COLUMN_EXPRESSION: { block: textBlock(predicate.columnExpression) } } : {}), ...(predicate.valueExpression ? { VALUE_EXPRESSION: { block: textBlock(predicate.valueExpression) } } : {}) } };
-      case 'null': return { type: 'predicate_null', id: id(), fields: { COLUMN: predicate.column, IS_NULL: predicate.isNull ? 'TRUE' : 'FALSE' } };
+      case 'compare': return { type: 'predicate_compare', id: id(), data: JSON.stringify({ predicate: { operatorVariable: predicate.operatorVariable ?? '' } }), fields: { COLUMN: predicate.column, OP: predicate.operator, VALUE: predicate.value }, inputs: { ...(predicate.columnExpression ? { COLUMN_EXPRESSION: { block: textBlock(predicate.columnExpression) } } : {}), ...(predicate.valueExpression ? { VALUE_EXPRESSION: { block: textBlock(predicate.valueExpression) } } : {}) } };
+      case 'null': return { type: 'predicate_null', id: id(), data: JSON.stringify({ predicate: { isNullVariable: predicate.isNullVariable ?? '' } }), fields: { COLUMN: predicate.column, IS_NULL: predicate.isNull ? 'TRUE' : 'FALSE' } };
       case 'logical':
         if (predicate.operator === 'not' && predicate.children.length === 1)
           return { type: 'predicate_not', id: id(), inputs: { VALUE: { block: predicateBlock(predicate.children[0]) } } };
@@ -247,20 +301,34 @@ export function definitionToWorkspace(definition: Definition): Record<string, un
   const blocks = definition.steps.map((step, index): Record<string, unknown> => {
     const block: Record<string, unknown> = { type: `pipeline_${step.type}`, id: step.id };
     if (index === 0) { block.x = 30; block.y = 30; }
-    if (step.type === 'csv') {
+    if (step.type === 'apiInput') {
+      block.data = JSON.stringify({ schema: step.schema, api: {
+        url: step.url, dataPath: step.dataPath,
+        method: isVariableReference(step.method) ? 'GET' : step.method,
+        methodVariable: isVariableReference(step.method) ? step.method : '',
+        format: isVariableReference(step.format) ? 'auto' : step.format,
+        formatVariable: isVariableReference(step.format) ? step.format : '',
+        authentication: isVariableReference(step.authentication) ? 'none' : step.authentication,
+        authenticationVariable: isVariableReference(step.authentication) ? step.authentication : '',
+        apiKeyName: step.apiKeyName, apiKey: step.apiKey, oauthTokenUrl: step.oauthTokenUrl, clientId: step.clientId,
+        clientSecret: step.clientSecret, scope: step.scope, nextPath: step.nextPath, useLinkHeader: step.useLinkHeader,
+        useLinkHeaderVariable: step.useLinkHeaderVariable,
+        body: step.body, headers: step.headers,
+      } });
+    } else if (step.type === 'csv') {
       block.fields = { DELIMITER: step.delimiter, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' };
       block.inputs = { PATH: { block: textBlock(step.pathExpression ?? { kind: 'literal', id: `${step.id}-path`, value: step.path }) } };
-      block.data = JSON.stringify({ schema: step.schema });
+      block.data = JSON.stringify({ schema: step.schema, hasHeaderVariable: 'hasHeaderVariable' in step ? step.hasHeaderVariable ?? '' : '' });
     } else if (step.type === 'parquetInput' || step.type === 'excelInput') {
       block.inputs = { PATH: { block: textBlock(step.pathExpression ?? { kind: 'literal', id: `${step.id}-path`, value: step.path }) } };
-      block.data = JSON.stringify({ schema: step.schema });
+      block.data = JSON.stringify({ schema: step.schema, hasHeaderVariable: 'hasHeaderVariable' in step ? step.hasHeaderVariable ?? '' : '' });
       if (step.type === 'excelInput') block.fields = { SHEET: step.sheet, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' };
     } else if (step.type === 'map') block.data = JSON.stringify({ mappings: step.mappings });
     else if (step.type === 'filter') block.inputs = { CRITERIA: { block: predicateBlock(step.criteria) } };
     else if (step.type === 'parquet' || step.type === 'csvOutput' || step.type === 'excelOutput') {
       block.inputs = { PATH: { block: textBlock(step.pathExpression ?? { kind: 'literal', id: `${step.id}-path`, value: step.path }) } };
-      if (step.type === 'csvOutput') block.fields = { DELIMITER: step.delimiter, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' };
-      if (step.type === 'excelOutput') block.fields = { SHEET: step.sheet, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' };
+      if (step.type === 'csvOutput') { block.fields = { DELIMITER: step.delimiter, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' }; block.data = JSON.stringify({ hasHeaderVariable: step.hasHeaderVariable ?? '' }); }
+      if (step.type === 'excelOutput') { block.fields = { SHEET: step.sheet, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' }; block.data = JSON.stringify({ hasHeaderVariable: step.hasHeaderVariable ?? '' }); }
     }
     return block;
   });

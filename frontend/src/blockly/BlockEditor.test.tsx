@@ -45,4 +45,12 @@ describe('BlockEditor selection', () => {
 
     expect(onChange).toHaveBeenCalledOnce();
   });
+
+  it('keeps workspace scrollbars and canvas panning enabled', () => {
+    render(<BlockEditor onChange={vi.fn()} onSelect={vi.fn()} />);
+
+    expect(Blockly.inject).toHaveBeenCalledWith(expect.any(HTMLDivElement), expect.objectContaining({
+      move: { scrollbars: true, drag: true, wheel: true },
+    }));
+  });
 });

@@ -89,6 +89,7 @@ it('rebuilds Blockly and default variables from a definition-only file', () => {
   const definition = structuredClone(saved.document.definition);
   const csv = definition.steps[0];
   if (csv.type === 'csv') {
+    delete csv.pathExpression;
     csv.path = '${INPUT_FILE}';
     csv.schema = csv.schema.map(({ name, type }) => ({ name, type } as typeof csv.schema[number]));
   }
@@ -99,14 +100,14 @@ it('rebuilds Blockly and default variables from a definition-only file', () => {
     Blockly.serialization.workspaces.load(imported.workspace, workspace);
     expect(compileWorkspace(workspace)).toEqual(imported.definition);
     expect(imported.name).toBe('customers-template');
-    expect(imported.environments).toEqual({ default: { INPUT_FILE: '', OUTPUT_FILE: '' } });
+    expect(imported.environments).toEqual({ default: { INPUT_FILE: '' } });
   } finally { workspace.dispose(); }
 });
 
 it('rejects an exported workspace that disagrees with its executable definition', () => {
   const workspace = new Blockly.Workspace();
   Blockly.serialization.workspaces.load(saved.document.workspace, workspace);
-  workspace.getBlockById('csv')!.setFieldValue('different.csv', 'PATH');
+  workspace.getBlockById('csv')!.getInputTargetBlock('PATH')!.setFieldValue('different.csv', 'VALUE');
   const mismatched = { format: 'pipeline-builder/pipeline', formatVersion: 1, pipeline: {
     ...saved.document, workspace: Blockly.serialization.workspaces.save(workspace),
   } };

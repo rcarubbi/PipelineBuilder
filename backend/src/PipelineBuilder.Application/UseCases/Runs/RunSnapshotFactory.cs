@@ -52,33 +52,106 @@ internal static partial class RunSnapshotFactory
             }
             string Resolve(string path) => VariablePattern().Replace(path, match =>
             {
-                var name = match.Groups[1].Value;
+                var scope = match.Groups[1].Value;
+                var name = match.Groups[2].Value;
+                if (scope == "secret") return match.Value;
+                if (scope == "var")
+                {
+                    if (!declarations.TryGetValue(name, out var declaration)) throw new PipelineDataException($"Missing pipeline variable '{name}'.");
+                    if (!active.Add(name)) throw new PipelineDataException($"Circular variable reference '{name}'.");
+                    try { return Evaluate(declaration, 0); }
+                    finally { active.Remove(name); }
+                }
+                if (scope == "env") return variables.TryGetValue(name, out var scopedValue)
+                    ? scopedValue : throw new PipelineDataException($"Missing environment variable '{name}'.");
                 if (name == "CURRENT_ENVIRONMENT") return environment;
                 return variables.TryGetValue(name, out var value) ? value
                     : throw new PipelineDataException($"Missing environment variable '{name}'.");
             });
-            PredicateRecord ResolvePredicate(PredicateRecord predicate) => predicate switch
+            bool ResolveBoolean(bool value, string? expression)
             {
-                ComparisonRecord comparison => comparison with
+                if (expression is null) return value;
+                if (bool.TryParse(Resolve(expression), out var resolved)) return resolved;
+                throw new PipelineDataException("Boolean property variable must resolve to 'true' or 'false'.");
+            }
+            PredicateRecord ResolvePredicate(PredicateRecord predicate)
+            {
+                switch (predicate)
                 {
-                    Column = comparison.ColumnExpression is null ? comparison.Column : Evaluate(comparison.ColumnExpression, 0),
-                    Value = comparison.ValueExpression is null ? comparison.Value : Evaluate(comparison.ValueExpression, 0),
-                    ColumnExpression = null,
-                    ValueExpression = null
-                },
-                LogicalRecord logical => logical with { Children = logical.Children.Select(ResolvePredicate).ToArray() },
-                _ => predicate
-            };
+                    case ComparisonRecord comparison:
+                        var operatorName = comparison.OperatorVariable is null
+                            ? comparison.Operator
+                            : Resolve(comparison.OperatorVariable);
+                        if (!Enum.TryParse<ComparisonOperator>(operatorName, true, out var comparisonOperator) ||
+                            !Enum.IsDefined(comparisonOperator))
+                            throw new PipelineDataException("Comparison operator variable did not resolve to a supported operator.");
+                        return comparison with
+                        {
+                            Column = comparison.ColumnExpression is null ? Resolve(comparison.Column) : Evaluate(comparison.ColumnExpression, 0),
+                            Value = comparison.ValueExpression is null ? Resolve(comparison.Value) : Evaluate(comparison.ValueExpression, 0),
+                            Operator = operatorName,
+                            ColumnExpression = null,
+                            ValueExpression = null,
+                            OperatorVariable = null
+                        };
+                    case NullRecord check:
+                        return check with
+                        {
+                            Column = Resolve(check.Column),
+                            IsNull = ResolveBoolean(check.IsNull, check.IsNullVariable),
+                            IsNullVariable = null
+                        };
+                    case LogicalRecord logical:
+                        return logical with { Children = logical.Children.Select(ResolvePredicate).ToArray() };
+                    default:
+                        return predicate;
+                }
+            }
+            ColumnRecord ResolveColumn(ColumnRecord column)
+            {
+                var type = column.Type;
+                if (column.TypeVariable is not null &&
+                    (!Enum.TryParse(Resolve(column.TypeVariable), true, out type) || !Enum.IsDefined(type)))
+                    throw new PipelineDataException("Column type variable did not resolve to a supported type.");
+                var nullable = ResolveBoolean(column.Nullable, column.NullableVariable);
+                var precision = ResolveInteger(column.Precision, column.PrecisionVariable);
+                var scale = ResolveInteger(column.Scale, column.ScaleVariable);
+                return column with
+                {
+                    Name = Resolve(column.Name), Type = type, Nullable = nullable, Precision = precision, Scale = scale,
+                    TypeVariable = null, NullableVariable = null, PrecisionVariable = null, ScaleVariable = null
+                };
+            }
+            int ResolveInteger(int value, string? expression)
+            {
+                if (expression is null) return value;
+                if (int.TryParse(Resolve(expression), NumberStyles.Integer, CultureInfo.InvariantCulture, out var resolved)) return resolved;
+                throw new PipelineDataException("Integer property variable did not resolve to a whole number.");
+            }
             var definition = pipeline.Document.Definition with
             {
                 Steps = pipeline.Document.Definition.Steps.Select(step => step switch
                 {
-                    CsvRecord csv => (StepRecord)(csv with { Path = csv.PathExpression is null ? Resolve(csv.Path) : Evaluate(csv.PathExpression, 0), PathExpression = null }),
+                    CsvRecord csv => (StepRecord)(csv with { Path = csv.PathExpression is null ? Resolve(csv.Path) : Evaluate(csv.PathExpression, 0), Delimiter = Resolve(csv.Delimiter), HasHeader = ResolveBoolean(csv.HasHeader, csv.HasHeaderVariable), HasHeaderVariable = null, Schema = csv.Schema.Select(ResolveColumn).ToArray(), PathExpression = null }),
                     ParquetRecord output => output with { Path = output.PathExpression is null ? Resolve(output.Path) : Evaluate(output.PathExpression, 0), PathExpression = null },
-                    CsvOutputRecord output => output with { Path = output.PathExpression is null ? Resolve(output.Path) : Evaluate(output.PathExpression, 0), PathExpression = null },
-                    ParquetInputRecord input => input with { Path = input.PathExpression is null ? Resolve(input.Path) : Evaluate(input.PathExpression, 0), PathExpression = null },
-                    ExcelInputRecord input => input with { Path = input.PathExpression is null ? Resolve(input.Path) : Evaluate(input.PathExpression, 0), PathExpression = null },
-                    ExcelOutputRecord output => output with { Path = output.PathExpression is null ? Resolve(output.Path) : Evaluate(output.PathExpression, 0), PathExpression = null },
+                    CsvOutputRecord output => output with { Path = output.PathExpression is null ? Resolve(output.Path) : Evaluate(output.PathExpression, 0), Delimiter = Resolve(output.Delimiter), HasHeader = ResolveBoolean(output.HasHeader, output.HasHeaderVariable), HasHeaderVariable = null, PathExpression = null },
+                    ParquetInputRecord input => input with { Path = input.PathExpression is null ? Resolve(input.Path) : Evaluate(input.PathExpression, 0), Schema = input.Schema.Select(ResolveColumn).ToArray(), PathExpression = null },
+                    ExcelInputRecord input => input with { Path = input.PathExpression is null ? Resolve(input.Path) : Evaluate(input.PathExpression, 0), Sheet = Resolve(input.Sheet), HasHeader = ResolveBoolean(input.HasHeader, input.HasHeaderVariable), HasHeaderVariable = null, Schema = input.Schema.Select(ResolveColumn).ToArray(), PathExpression = null },
+                    ExcelOutputRecord output => output with { Path = output.PathExpression is null ? Resolve(output.Path) : Evaluate(output.PathExpression, 0), Sheet = Resolve(output.Sheet), HasHeader = ResolveBoolean(output.HasHeader, output.HasHeaderVariable), HasHeaderVariable = null, PathExpression = null },
+                    MapRecord map => map with { Mappings = map.Mappings.Select(m => m with { Source = Resolve(m.Source), Target = ResolveColumn(m.Target), Format = m.Format is null ? null : Resolve(m.Format) }).ToArray() },
+                    ApiInputRecord api => api with
+                    {
+                        Url = Resolve(api.Url), Method = Resolve(api.Method), Format = Resolve(api.Format),
+                        Authentication = Resolve(api.Authentication), DataPath = Resolve(api.DataPath), Username = Resolve(api.Username ?? ""),
+                        Password = Resolve(api.Password ?? ""), Token = Resolve(api.Token ?? ""),
+                        ApiKeyName = Resolve(api.ApiKeyName ?? ""), ApiKey = Resolve(api.ApiKey ?? ""),
+                        OAuthTokenUrl = Resolve(api.OAuthTokenUrl ?? ""), ClientId = Resolve(api.ClientId ?? ""),
+                        ClientSecret = Resolve(api.ClientSecret ?? ""), Scope = Resolve(api.Scope ?? ""),
+                        NextPath = Resolve(api.NextPath ?? ""), Body = Resolve(api.Body ?? ""),
+                        UseLinkHeader = ResolveBoolean(api.UseLinkHeader, api.UseLinkHeaderVariable), UseLinkHeaderVariable = null,
+                        Headers = api.Headers?.ToDictionary(p => Resolve(p.Key), p => Resolve(p.Value), StringComparer.OrdinalIgnoreCase),
+                        Schema = api.Schema.Select(ResolveColumn).ToArray()
+                    },
                     FilterRecord filter => filter with { Criteria = ResolvePredicate(filter.Criteria) },
                     _ => step
                 }).ToArray()
@@ -90,6 +163,6 @@ internal static partial class RunSnapshotFactory
         catch (PipelineDataException ex) { return Error.Validation(ex.BlockId ?? "Run.Configuration", ex.Message); }
     }
 
-    [GeneratedRegex(@"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\$\{(?:(var|env|secret)\.)?([A-Za-z_][A-Za-z0-9_]*)\}", RegexOptions.CultureInvariant)]
     private static partial Regex VariablePattern();
 }

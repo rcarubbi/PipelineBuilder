@@ -4,7 +4,8 @@ using PipelineBuilder.Domain.Pipelines;
 
 namespace PipelineBuilder.Application.Contracts;
 
-public sealed record ColumnRecord(string Name, ColumnTypeRecord Type, bool Nullable = false, int Precision = 18, int Scale = 2);
+public sealed record ColumnRecord(string Name, ColumnTypeRecord Type, bool Nullable = false, int Precision = 18, int Scale = 2,
+    string? TypeVariable = null, string? NullableVariable = null, string? PrecisionVariable = null, string? ScaleVariable = null);
 public enum ColumnTypeRecord { String, Boolean, Int64, Decimal, Double, Date, Timestamp }
 public sealed record MappingRecord(string Source, ColumnRecord Target, string? Format = null);
 public sealed record DefinitionRecord(int FormatVersion, StepRecord[] Steps, VariableRecord[]? Variables = null);
@@ -33,23 +34,31 @@ public sealed record TextUtcRecord(string Id, string Format, TextExpressionRecor
 [JsonDerivedType(typeof(ParquetInputRecord), "parquetInput")]
 [JsonDerivedType(typeof(ExcelInputRecord), "excelInput")]
 [JsonDerivedType(typeof(ExcelOutputRecord), "excelOutput")]
+[JsonDerivedType(typeof(ApiInputRecord), "apiInput")]
 public abstract record StepRecord(string Id);
-public sealed record CsvRecord(string Id, string Path, ColumnRecord[] Schema, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record CsvRecord(string Id, string Path, ColumnRecord[] Schema, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null, string? HasHeaderVariable = null) : StepRecord(Id);
 public sealed record MapRecord(string Id, MappingRecord[] Mappings) : StepRecord(Id);
 public sealed record FilterRecord(string Id, PredicateRecord Criteria) : StepRecord(Id);
 public sealed record ParquetRecord(string Id, string Path, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
-public sealed record CsvOutputRecord(string Id, string Path, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record CsvOutputRecord(string Id, string Path, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null, string? HasHeaderVariable = null) : StepRecord(Id);
 public sealed record ParquetInputRecord(string Id, string Path, ColumnRecord[] Schema, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
-public sealed record ExcelInputRecord(string Id, string Path, ColumnRecord[] Schema, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
-public sealed record ExcelOutputRecord(string Id, string Path, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null) : StepRecord(Id);
+public sealed record ExcelInputRecord(string Id, string Path, ColumnRecord[] Schema, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null, string? HasHeaderVariable = null) : StepRecord(Id);
+public sealed record ExcelOutputRecord(string Id, string Path, string Sheet, bool HasHeader = true, TextExpressionRecord? PathExpression = null, string? HasHeaderVariable = null) : StepRecord(Id);
+public sealed record ApiInputRecord(string Id, string Url, ColumnRecord[] Schema, string DataPath = "", string Method = "GET",
+    string Format = "auto", string Authentication = "none", string? Username = null, string? Password = null,
+    string? Token = null, string? ApiKeyName = null, string? ApiKey = null, string? OAuthTokenUrl = null,
+    string? ClientId = null, string? ClientSecret = null, string? Scope = null,
+    string? NextPath = null, bool UseLinkHeader = false, string? Body = null, Dictionary<string, string>? Headers = null,
+    string? UseLinkHeaderVariable = null) : StepRecord(Id);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(ComparisonRecord), "compare")]
 [JsonDerivedType(typeof(NullRecord), "null")]
 [JsonDerivedType(typeof(LogicalRecord), "logical")]
 public abstract record PredicateRecord;
-public sealed record ComparisonRecord(string Column, string Operator, string Value, TextExpressionRecord? ColumnExpression = null, TextExpressionRecord? ValueExpression = null) : PredicateRecord;
-public sealed record NullRecord(string Column, bool IsNull) : PredicateRecord;
+public sealed record ComparisonRecord(string Column, string Operator, string Value, TextExpressionRecord? ColumnExpression = null,
+    TextExpressionRecord? ValueExpression = null, string? OperatorVariable = null) : PredicateRecord;
+public sealed record NullRecord(string Column, bool IsNull, string? IsNullVariable = null) : PredicateRecord;
 public sealed record LogicalRecord(string Operator, PredicateRecord[] Children) : PredicateRecord;
 public sealed record IssueRecord(string BlockId, string Message);
 public sealed record SchemaRecord(string BlockId, ColumnRecord[] Input, ColumnRecord[] Output);
@@ -75,14 +84,17 @@ public static class DefinitionMapping
     public static PipelineDefinition MapTo(this DefinitionRecord definition) => new(definition.FormatVersion, definition.Steps.Select(MapTo).ToArray());
     public static PipelineStep MapTo(this StepRecord step) => step switch
     {
-        CsvRecord csv => new CsvStep(csv.Id, csv.Path, csv.Schema.Select(MapTo).ToArray(), csv.Delimiter, csv.HasHeader),
+        CsvRecord csv => new CsvStep(csv.Id, csv.Path, csv.Schema.Select(MapTo).ToArray(), csv.Delimiter, csv.HasHeader, csv.HasHeaderVariable),
         MapRecord map => new MapStep(map.Id, map.Mappings.Select(m => new ColumnMapping(m.Source, m.Target.MapTo(), m.Format)).ToArray()),
         FilterRecord filter => new FilterStep(filter.Id, filter.Criteria.MapTo()),
         ParquetRecord parquet => new ParquetStep(parquet.Id, parquet.Path),
-        CsvOutputRecord csv => new CsvOutputStep(csv.Id, csv.Path, csv.Delimiter, csv.HasHeader),
+        CsvOutputRecord csv => new CsvOutputStep(csv.Id, csv.Path, csv.Delimiter, csv.HasHeader, csv.HasHeaderVariable),
         ParquetInputRecord parquet => new ParquetInputStep(parquet.Id, parquet.Path, parquet.Schema.Select(MapTo).ToArray()),
-        ExcelInputRecord excel => new ExcelInputStep(excel.Id, excel.Path, excel.Schema.Select(MapTo).ToArray(), excel.Sheet, excel.HasHeader),
-        ExcelOutputRecord excel => new ExcelOutputStep(excel.Id, excel.Path, excel.Sheet, excel.HasHeader),
+        ExcelInputRecord excel => new ExcelInputStep(excel.Id, excel.Path, excel.Schema.Select(MapTo).ToArray(), excel.Sheet, excel.HasHeader, excel.HasHeaderVariable),
+        ExcelOutputRecord excel => new ExcelOutputStep(excel.Id, excel.Path, excel.Sheet, excel.HasHeader, excel.HasHeaderVariable),
+        ApiInputRecord api => new ApiInputStep(api.Id, api.Url, api.Schema.Select(MapTo).ToArray(), api.DataPath, api.Method,
+            api.Format, api.Authentication, api.Username, api.Password, api.Token, api.ApiKeyName, api.ApiKey,
+            api.OAuthTokenUrl, api.ClientId, api.ClientSecret, api.Scope, api.NextPath, api.UseLinkHeader, api.Body, api.Headers, api.UseLinkHeaderVariable),
         _ => throw new ArgumentException("Unsupported step.")
     };
     public static IRowPredicate MapTo(this PredicateRecord predicate) => predicate switch

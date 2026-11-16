@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Blockly from 'blockly/core';
 import { BlockEditor, type EditorHandle } from './blockly/BlockEditor';
-import { compileEnvironments, compileWorkspace, getBlockData, schemaBefore } from './blockly/workspace';
+import { compileEnvironments, compileWorkspace, getBlockData, restoreEnvironmentBlocks, schemaBefore } from './blockly/workspace';
 import { BlockProperties } from './components/BlockProperties';
 import { IconButton, IconLink } from './components/Icon';
 import { PageHeader } from './components/PageHeader';
@@ -15,11 +15,11 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
   const [id] = useState(pipelineId ?? crypto.randomUUID());
   const [revision, setRevision] = useState(initialPipeline?.revision ?? 0);
   const [name, setName] = useState(initialPipeline?.document.name ?? 'New pipeline');
-  const [initialWorkspace, setInitialWorkspace] = useState<Record<string, unknown> | undefined>(initialPipeline?.document.workspace);
+  const [initialWorkspace, setInitialWorkspace] = useState<Record<string, unknown> | undefined>(() =>
+    initialPipeline ? restoreEnvironmentBlocks(initialPipeline.document.workspace, initialPipeline.document.environments) : undefined);
   const [loading, setLoading] = useState(!!pipelineId && !initialPipeline);
   const [environment, setEnvironment] = useState(Object.keys(initialPipeline?.document.environments ?? {})[0] ?? 'development');
-  const [environmentNames, setEnvironmentNames] = useState<string[]>(['development']);
-  const [environments, setEnvironments] = useState<Record<string, Record<string, string>>>({});
+  const [workspaceEnvironments, setWorkspaceEnvironments] = useState<Record<string, Record<string, string>>>({});
   const [definition, setDefinition] = useState<Definition | null>(null);
   const [designError, setDesignError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -43,13 +43,16 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
     try {
       const workspace = editor.current!.workspace();
       const currentEnvironments = compileEnvironments(workspace);
-      setEnvironments(currentEnvironments);
-      const names = Object.keys(currentEnvironments);
-      setEnvironmentNames(names); setEnvironment(current => names.includes(current) ? current : names[0]);
+      setWorkspaceEnvironments(currentEnvironments);
       setDefinition(compileWorkspace(workspace)); setDesignError('');
     }
     catch (ex) { setDefinition(null); setDesignError((ex as Error).message); }
   }, []);
+  const environmentNames = Object.keys(workspaceEnvironments);
+  const availableEnvironments = environmentNames.length ? environmentNames : ['development'];
+  useEffect(() => {
+    if (environmentNames.length && !environmentNames.includes(environment)) setEnvironment(environmentNames[0]);
+  }, [availableEnvironments.join('\0'), environment]);
   const selected = editor.current?.workspace().getBlockById(selectedId ?? '') ?? null;
   const schemas = definition ? (analysis?.schemas ?? inferSchemas(definition)) : [];
   const selectedSchema = schemas.find(s => s.blockId === selectedId) ?? (selected ? {
@@ -68,8 +71,8 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
     api.load(pipelineId).then(result => {
       if (disposed) return;
       setName(result.document.name); setRevision(result.revision);
-      setEnvironment(Object.keys(result.document.environments)[0]);
-      setInitialWorkspace(result.document.workspace);
+      setEnvironment(Object.keys(result.document.environments)[0] ?? 'development');
+      setInitialWorkspace(restoreEnvironmentBlocks(result.document.workspace, result.document.environments));
     }).catch(ex => { if (!disposed) setError(ex instanceof Error ? ex.message : 'Could not load pipeline.'); })
       .finally(() => { if (!disposed) setLoading(false); });
     return () => { disposed = true; };
@@ -85,9 +88,10 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
   async function save() {
     const workspace = editor.current!.workspace();
     const workspaceState = Blockly.serialization.workspaces.save(workspace);
+    const environments = compileEnvironments(workspace);
     const currentSignature = JSON.stringify({ name, workspace: workspaceState });
     if (revision > 0 && currentSignature === savedSignature.current) return { id, revision };
-    const result = await api.save(id, revision, { name, definition: compileWorkspace(workspace), workspace: workspaceState, environments: compileEnvironments(workspace) });
+    const result = await api.save(id, revision, { name, definition: compileWorkspace(workspace), workspace: workspaceState, environments });
     savedSignature.current = currentSignature;
     setRevision(result.revision); setChangeNumber(n => n + 1);
     history.replaceState(null, '', `?page=designer&pipeline=${id}`);
@@ -103,12 +107,33 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
   }
 
   async function discover() {
-    if (!selected || selected.type !== 'pipeline_csv') return;
+    if (!selected || !['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'].includes(selected.type)) return;
+    if (selected.type === 'pipeline_apiInput') {
+      const configuration = getBlockData(selected);
+      const apiConfig = configuration.api ?? {};
+      const result = await api.discover('', ',', true, 'api', undefined, {
+        type: 'apiInput', id: selected.id, url: String(apiConfig.url ?? ''), schema: [], dataPath: String(apiConfig.dataPath ?? ''),
+        method: apiConfig.method ?? 'GET', format: apiConfig.format ?? 'auto', authentication: apiConfig.authentication ?? 'none',
+        username: apiConfig.username, password: apiConfig.password, token: apiConfig.token, apiKeyName: apiConfig.apiKeyName,
+        apiKey: apiConfig.apiKey, oauthTokenUrl: apiConfig.oauthTokenUrl, clientId: apiConfig.clientId,
+        clientSecret: apiConfig.clientSecret, scope: apiConfig.scope, nextPath: apiConfig.nextPath,
+        useLinkHeader: Boolean(apiConfig.useLinkHeader), body: apiConfig.body, headers: apiConfig.headers,
+      });
+      selected.data = JSON.stringify({
+        ...configuration,
+        schema: result.schema,
+        api: { ...apiConfig, dataPaths: result.dataPaths ?? [], dataPath: apiConfig.dataPath || result.dataPaths?.[0] || '' },
+      });
+      refresh();
+      setMessage('Sampled API response. Review and save the proposed schema.');
+      return;
+    }
     const path = selected.getInputTargetBlock('PATH');
-    if (!path || path.type !== 'value_literal') throw new Error('Schema discovery currently requires a literal CSV path.');
-    const result = await api.discover(path.getFieldValue('VALUE'), selected.getFieldValue('DELIMITER'), selected.getFieldValue('HEADER') === 'TRUE');
+    if (!path || path.type !== 'value_literal') throw new Error('Schema discovery requires a literal file path.');
+    const format = selected.type === 'pipeline_csv' ? 'csv' : selected.type === 'pipeline_parquetInput' ? 'parquet' : 'excel';
+    const result = await api.discover(path.getFieldValue('VALUE'), selected.type === 'pipeline_csv' ? selected.getFieldValue('DELIMITER') : ',', selected.type !== 'pipeline_excelInput' || selected.getFieldValue('HEADER') === 'TRUE', format, selected.type === 'pipeline_excelInput' ? selected.getFieldValue('SHEET') : undefined);
     selected.data = JSON.stringify({ schema: result.schema }); refresh();
-    setMessage(`Sampled up to ${result.sampleLimit} records. Review and save the proposed schema.`);
+    setMessage(format === 'parquet' ? 'Loaded Parquet metadata. Review and save the proposed schema.' : `Sampled up to ${result.sampleLimit} records. Review and save the proposed schema.`);
   }
 
   function moveSelected(direction: -1 | 1) {
@@ -185,7 +210,7 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
       <section className="toolbar" aria-label="Pipeline actions">
         <IconLink icon="list" label="Back to pipelines" href="/" />
         <label>Pipeline name<input value={name} onChange={e => { setName(e.target.value); setChangeNumber(n => n + 1); }} /></label>
-        <label>Environment<select value={environment} onChange={e => setEnvironment(e.target.value)}>{environmentNames.map(env => <option key={env}>{env}</option>)}</select></label>
+        <label>Environment<select value={environment} onChange={e => setEnvironment(e.target.value)}>{availableEnvironments.map(env => <option key={env}>{env}</option>)}</select></label>
         <div className="actions">
           <IconButton icon="check" label="Validate" disabled={busy || !definition} onClick={() => void perform(async () => { const result = await api.validate(compileWorkspace(editor.current!.workspace())); setAnalysis(result); setMessage(result.issues.length ? 'Fix the highlighted validation issues.' : 'Pipeline is valid.'); })} />
           <IconButton icon="save" label="Save" disabled={busy || !definition} onClick={() => void perform(async () => { await save(); })} />
@@ -218,7 +243,7 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
               onReady={() => { if (pipelineId) savedSignature.current = signature(); refresh(); }} />
           </div>
           {view === 'json' && <div id="designer-json" className="json-panel" role="tabpanel" aria-label="Pipeline JSON">
-            <pre className="json-view" tabIndex={0} aria-readonly="true">{definition ? JSON.stringify({ ...definition, environments }, null, 2) : `Pipeline is incomplete: ${designError}`}</pre>
+            <pre className="json-view" tabIndex={0} aria-readonly="true">{definition ? JSON.stringify({ ...definition, environments: workspaceEnvironments }, null, 2) : `Pipeline is incomplete: ${designError}`}</pre>
           </div>}
         </section>
         <aside id="designer-properties" aria-label="Properties" aria-hidden={!propertiesOpen} inert={!propertiesOpen}>

@@ -183,6 +183,24 @@ it('adds the same pipeline to one schedule in several environments and shows the
   expect(screen.queryByRole('group', { name: 'Add Customers to a schedule' })).not.toBeInTheDocument();
 });
 
+it('collapses and reopens the schedule editor without losing the current draft', async () => {
+  const user = userEvent.setup();
+  render(<PipelinesPage />);
+  await screen.findByText('Customers');
+  const toggle = screen.getByRole('button', { name: 'Schedule Customers' });
+  await user.click(toggle);
+  const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
+  await user.click(form.getByRole('checkbox', { name: 'test' }));
+
+  await user.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByRole('group', { name: 'Add Customers to a schedule' })).not.toBeInTheDocument();
+
+  await user.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  expect(within(screen.getByRole('group', { name: 'Add Customers to a schedule' })).getByRole('checkbox', { name: 'test' })).toBeChecked();
+});
+
 it('shows existing environments for a schedule and removes only the unchecked one', async () => {
   const links = ['development', 'test'].map(environment => ({ pipelineId: 'pipeline-1', pipelineName: 'Customers', environment }));
   vi.mocked(api.schedules).mockResolvedValue({ schedules: [{ ...schedule, pipelines: links }] });

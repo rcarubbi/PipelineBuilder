@@ -81,6 +81,132 @@ public sealed class StartRunCommandTests
     }
 
     [TestMethod]
+    public async Task Handle_When_ApiTextPropertiesUseVariableScopes_Then_ResolvesAllAndKeepsSecretReference()
+    {
+        var definition = new DefinitionRecord(1, [
+            new ApiInputRecord("api", "https://${env.HOST}/v1", [new("${var.COLUMN}", ColumnTypeRecord.String, true,
+                TypeVariable: "${env.COLUMN_TYPE}", NullableVariable: "${env.COLUMN_NULLABLE}")],
+                DataPath: "${var.DATA_PATH}", Method: "${var.API_METHOD}", Authentication: "bearer", Token: "${secret.API_TOKEN}",
+                Headers: new() { ["X-Tenant"] = "${env.TENANT}" }, UseLinkHeaderVariable: "${env.LINK_HEADER}"),
+            new MapRecord("map", [new MappingRecord("id", new ColumnRecord("amount", ColumnTypeRecord.Decimal,
+                PrecisionVariable: "${env.PRECISION}", ScaleVariable: "${env.SCALE}"))]),
+            new FilterRecord("filter", new LogicalRecord("and", [
+                new ComparisonRecord("amount", "equal", "7", OperatorVariable: "${env.OPERATOR}"),
+                new NullRecord("amount", true, "${env.IS_NULL}")
+            ])),
+            new CsvOutputRecord("out", "result.csv", "${env.DELIMITER}", HasHeaderVariable: "${env.HAS_HEADER}")
+        ], [new VariableRecord("COLUMN", new TextLiteralRecord("column", "id")),
+            new VariableRecord("DATA_PATH", new TextLiteralRecord("path", "payload.items")),
+            new VariableRecord("API_METHOD", new TextLiteralRecord("method", "POST"))]);
+        _pipeline = _pipeline with
+        {
+            Document = _pipeline.Document with
+            {
+                Definition = definition,
+                Environments = new() { ["test"] = new() { ["HOST"] = "api.example.com", ["TENANT"] = "tenant-1", ["DELIMITER"] = ";", ["LINK_HEADER"] = "true", ["HAS_HEADER"] = "false", ["COLUMN_TYPE"] = "int64", ["COLUMN_NULLABLE"] = "false", ["OPERATOR"] = "greater", ["IS_NULL"] = "false", ["PRECISION"] = "12", ["SCALE"] = "3" } }
+            }
+        };
+        _queries.Setup(q => q.GetPipeline(_pipeline.Id, _ct)).ReturnsAsync(_pipeline);
+
+        var result = await _sut.Handle(new(_pipeline.Id, 2, "test"), _ct);
+
+        result.IsError.ShouldBeFalse();
+        _repository.Verify(r => r.Enqueue(_pipeline.Id, 2, It.Is<RunSnapshotRecord>(snapshot =>
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).Url == "https://api.example.com/v1" &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).Method == "POST" &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).Schema[0].Name == "id" &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).Schema[0].Type == ColumnTypeRecord.Int64 &&
+            !((ApiInputRecord)snapshot.Definition.Steps[0]).Schema[0].Nullable &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).DataPath == "payload.items" &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).Token == "${secret.API_TOKEN}" &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).Headers!["X-Tenant"] == "tenant-1" &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).UseLinkHeader &&
+            ((ApiInputRecord)snapshot.Definition.Steps[0]).UseLinkHeaderVariable == null &&
+            ((MapRecord)snapshot.Definition.Steps[1]).Mappings[0].Target.Precision == 12 &&
+            ((MapRecord)snapshot.Definition.Steps[1]).Mappings[0].Target.Scale == 3 &&
+            ((MapRecord)snapshot.Definition.Steps[1]).Mappings[0].Target.PrecisionVariable == null &&
+            ((ComparisonRecord)((LogicalRecord)((FilterRecord)snapshot.Definition.Steps[2]).Criteria).Children[0]).Operator == "greater" &&
+            ((ComparisonRecord)((LogicalRecord)((FilterRecord)snapshot.Definition.Steps[2]).Criteria).Children[0]).OperatorVariable == null &&
+            !((NullRecord)((LogicalRecord)((FilterRecord)snapshot.Definition.Steps[2]).Criteria).Children[1]).IsNull &&
+            ((CsvOutputRecord)snapshot.Definition.Steps[3]).Delimiter == ";" &&
+            !((CsvOutputRecord)snapshot.Definition.Steps[3]).HasHeader &&
+            ((CsvOutputRecord)snapshot.Definition.Steps[3]).HasHeaderVariable == null), _ct), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Handle_When_BooleanPropertyVariableIsNotBoolean_Then_RejectsRun()
+    {
+        var definition = new DefinitionRecord(1, [
+            new CsvRecord("csv", "input.csv", [new("id", ColumnTypeRecord.Int64)]),
+            new CsvOutputRecord("out", "output.csv", HasHeaderVariable: "${env.HAS_HEADER}")
+        ]);
+        _pipeline = _pipeline with
+        {
+            Document = _pipeline.Document with
+            {
+                Definition = definition,
+                Environments = new() { ["test"] = new() { ["HAS_HEADER"] = "sometimes" } }
+            }
+        };
+        _queries.Setup(q => q.GetPipeline(_pipeline.Id, _ct)).ReturnsAsync(_pipeline);
+
+        var result = await _sut.Handle(new(_pipeline.Id, 2, "test"), _ct);
+
+        result.IsError.ShouldBeTrue();
+        result.FirstError.Description.ShouldContain("true");
+        _repository.Verify(r => r.Enqueue(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<RunSnapshotRecord>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task Handle_When_ColumnTypeVariableResolvesToUndefinedNumericEnum_Then_RejectsRun()
+    {
+        var definition = new DefinitionRecord(1, [
+            new CsvRecord("csv", "input.csv", [new("id", ColumnTypeRecord.String, TypeVariable: "${env.COLUMN_TYPE}")]),
+            new CsvOutputRecord("out", "output.csv")
+        ]);
+        _pipeline = _pipeline with
+        {
+            Document = _pipeline.Document with
+            {
+                Definition = definition,
+                Environments = new() { ["test"] = new() { ["COLUMN_TYPE"] = "999" } }
+            }
+        };
+        _queries.Setup(q => q.GetPipeline(_pipeline.Id, _ct)).ReturnsAsync(_pipeline);
+
+        var result = await _sut.Handle(new(_pipeline.Id, 2, "test"), _ct);
+
+        result.IsError.ShouldBeTrue();
+        result.FirstError.Description.ShouldContain("supported type");
+        _repository.Verify(r => r.Enqueue(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<RunSnapshotRecord>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task Handle_When_ComparisonOperatorVariableIsUnsupported_Then_RejectsRun()
+    {
+        var definition = new DefinitionRecord(1, [
+            new CsvRecord("csv", "input.csv", [new("id", ColumnTypeRecord.Int64)]),
+            new FilterRecord("filter", new ComparisonRecord("id", "equal", "1", OperatorVariable: "${env.OPERATOR}")),
+            new CsvOutputRecord("out", "output.csv")
+        ]);
+        _pipeline = _pipeline with
+        {
+            Document = _pipeline.Document with
+            {
+                Definition = definition,
+                Environments = new() { ["test"] = new() { ["OPERATOR"] = "999" } }
+            }
+        };
+        _queries.Setup(q => q.GetPipeline(_pipeline.Id, _ct)).ReturnsAsync(_pipeline);
+
+        var result = await _sut.Handle(new(_pipeline.Id, 2, "test"), _ct);
+
+        result.IsError.ShouldBeTrue();
+        result.FirstError.Description.ShouldContain("supported operator");
+        _repository.Verify(r => r.Enqueue(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<RunSnapshotRecord>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
     public async Task Handle_When_CurrentEnvironmentIsReferenced_Then_UsesSelectedNameForPathsAndExpressions()
     {
         _pipeline.Document.Environments["test"]["CURRENT_ENVIRONMENT"] = "other";

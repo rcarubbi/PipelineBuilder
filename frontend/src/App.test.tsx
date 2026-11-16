@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Blockly from 'blockly/core';
 import { App } from './App';
@@ -20,7 +20,10 @@ vi.mock('./blockly/BlockEditor', async () => {
       onReady();
       return () => workspace.dispose();
     }, []);
-    return <div aria-label="Test block editor" />;
+    return <div aria-label="Test block editor" data-environments={JSON.stringify(Object.fromEntries(
+      workspace.getTopBlocks(false).filter(block => block.type === 'define_environment').map(block => [
+        `${block.getFieldValue('ENVIRONMENT')}.${block.getFieldValue('NAME')}`, block.getFieldValue('VALUE'),
+      ])))}/>;
   }) };
 });
 
@@ -91,7 +94,7 @@ it('runs the existing revision without saving and links to execution logs', asyn
   await screen.findByText('Revision 4 · saved');
   await userEvent.setup().click(screen.getByRole('button', { name: 'Save & run' }));
   expect(api.save).not.toHaveBeenCalled();
-  expect(api.run).toHaveBeenCalledWith('pipeline-1', 4, 'development');
+  expect(api.run).toHaveBeenCalledWith('pipeline-1', 4, 'test');
   expect(await screen.findByRole('link', { name: 'execution logs' })).toHaveAttribute('href', '?page=logs&pipeline=pipeline-1');
 });
 
@@ -115,8 +118,8 @@ it('automatically opens the saved workspace and uses its revision when saving', 
 
   await userEvent.setup().click(screen.getByRole('button', { name: 'Save' }));
 
-  expect(api.save).toHaveBeenCalledWith('pipeline-1', 4, expect.objectContaining({ name: 'Saved export', definition: saved.document.definition }));
-  expect(await screen.findByText('Saved revision 5.')).toBeInTheDocument();
+  expect(api.save).not.toHaveBeenCalled();
+  expect(screen.getByText('Revision 4 · saved')).toBeInTheDocument();
 });
 
 it('exports the latest saved revision from the designer', async () => {
@@ -150,18 +153,18 @@ it('switches between the canvas and a read-only executable JSON view without los
   render(<App pipelineId="pipeline-1" />);
   await screen.findByLabelText('Pipeline name');
   const canvasTab = screen.getByRole('tab', { name: 'Canvas' });
-  const jsonTab = screen.getByRole('tab', { name: 'Executable JSON (read-only)' });
+  const jsonTab = screen.getByRole('tab', { name: 'Pipeline JSON (read-only)' });
   expect(canvasTab).toHaveAttribute('aria-selected', 'true');
-  expect(screen.queryByRole('tabpanel', { name: 'Executable JSON' })).not.toBeInTheDocument();
-  expect(screen.queryByText('Executable JSON', { selector: 'summary' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('tabpanel', { name: 'Pipeline JSON' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Pipeline JSON', { selector: 'summary' })).not.toBeInTheDocument();
 
   await user.click(jsonTab);
 
   expect(jsonTab).toHaveAttribute('aria-selected', 'true');
   expect(document.getElementById('designer-canvas')).toHaveAttribute('hidden');
-  const json = within(screen.getByRole('tabpanel', { name: 'Executable JSON' }));
+  const json = within(screen.getByRole('tabpanel', { name: 'Pipeline JSON' }));
   const view = json.getByText(/"formatVersion": 1/);
-  expect(JSON.parse(view.textContent!)).toEqual(saved.document.definition);
+  expect(JSON.parse(view.textContent!)).toEqual({ ...saved.document.definition, environments: saved.document.environments });
   expect(view.tagName).toBe('PRE');
   expect(json.queryByRole('textbox')).not.toBeInTheDocument();
 
@@ -171,40 +174,14 @@ it('switches between the canvas and a read-only executable JSON view without los
   expect(screen.getByLabelText('Test block editor')).toBeInTheDocument();
 });
 
-it('opens the collapsed environments panel automatically when its contents are invalid', async () => {
-  const user = userEvent.setup();
+it('restores saved environment values as Blockly blocks without an external editor', async () => {
   render(<App pipelineId="pipeline-1" />);
-  await screen.findByLabelText('Pipeline name');
-  const panel = screen.getByText('Environments').closest('details')!;
-  expect(panel).not.toHaveAttribute('open');
-
-  await user.click(screen.getByText('Environments'));
-  expect(panel).toHaveAttribute('open');
-  await user.clear(screen.getByLabelText('Environment name'));
-  await user.click(screen.getByText('Environments'));
-
-  expect(panel).toHaveAttribute('open');
-  expect(within(panel).getByText('— needs attention')).toBeInTheDocument();
-});
-
-it('edits environments with the form and blocks saving while they are invalid', async () => {
-  const user = userEvent.setup();
-  render(<App pipelineId="pipeline-1" />);
-  const value = await screen.findByLabelText('Value of INPUT_FILE in test');
-
-  await user.clear(value);
-  await user.type(value, 'orders.csv');
-  await user.click(screen.getByRole('button', { name: 'Save' }));
-  expect(api.save).toHaveBeenLastCalledWith('pipeline-1', 4, expect.objectContaining({
-    environments: { test: { INPUT_FILE: 'orders.csv', OUTPUT_FILE: 'saved.parquet' } } }));
-
-  vi.mocked(api.save).mockClear();
-  await user.clear(screen.getByLabelText('Name of variable 1 in test'));
-  await user.type(screen.getByLabelText('Name of variable 1 in test'), 'BAD NAME');
-  await user.click(screen.getByRole('button', { name: 'Save' }));
-
-  expect(api.save).not.toHaveBeenCalled();
-  expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('must start with a letter or underscore'))).toBe(true);
+  const canvas = await screen.findByLabelText('Test block editor');
+  await waitFor(() => expect(canvas).toHaveAttribute('data-environments', JSON.stringify({
+    'test.INPUT_FILE': 'saved-customers.csv', 'test.OUTPUT_FILE': 'saved.parquet',
+  })));
+  expect(screen.queryByText('Environments')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Environment')).toHaveValue('test');
 });
 
 it('does not replace a failed load with an editable new pipeline', async () => {
@@ -229,12 +206,12 @@ it('creates a new draft without loading a saved pipeline or showing old header c
   expect(screen.queryByText('POC · server files · fail-fast')).not.toBeInTheDocument();
 });
 
-it('keeps the editor and environments without run panels or extra canvas bars', async () => {
+it('keeps variable management in Blockly without a separate environment panel', async () => {
   const { container } = render(<App />);
   await screen.findByLabelText('Pipeline name');
 
   expect(screen.getByLabelText('Test block editor')).toBeInTheDocument();
-  expect(screen.getByText('Environments').closest('details')).not.toHaveAttribute('open');
+  expect(screen.queryByText('Environments')).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Run' })).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Open saved pipeline' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Add map / convert' })).not.toBeInTheDocument();
@@ -253,7 +230,7 @@ it('still saves and starts a run with feedback outside the removed panel', async
 
   await userEvent.setup().click(screen.getByRole('button', { name: 'Save & run' }));
 
-  expect(api.run).toHaveBeenCalledWith(saved.id, 5, 'test');
-  expect(await screen.findByText('Run run-1 queued. Results are available in execution logs.')).toBeInTheDocument();
+  expect(api.run).toHaveBeenCalledWith(saved.id, 4, 'test');
+  expect(await screen.findByRole('status')).toHaveTextContent('Run run-1 queued. Results are available in execution logs.');
   expect(screen.queryByRole('heading', { name: 'Run' })).not.toBeInTheDocument();
 });

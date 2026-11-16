@@ -2,10 +2,14 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using Parquet;
 using ExcelReader.Core.Reader;
 using PipelineBuilder.Application.Contracts;
 using PipelineBuilder.Application.Interfaces;
+using PipelineBuilder.Domain.Pipelines;
 using PipelineBuilder.Infrastructure.Files;
 using Shouldly;
 
@@ -55,6 +59,35 @@ public sealed class PipelineFilesTests
         string?[] names = new string?[2];
         await group.ReadAsync(parquet.Schema.DataFields[1], names, cancellationToken: _ct);
         names.ShouldBe(["Ana", "Lee, Jo"]);
+    }
+
+    [TestMethod]
+    public async Task DiscoverParquet_When_FileHasPrimitiveFields_Then_UsesParquetMetadata()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_root, "input/data.csv"), "age,name\n32,Ana\n", _ct);
+        await _sut.Execute(Definition(), _ => Task.FromResult(false), _ct);
+        File.Copy(Path.Combine(_root, "output/adults.parquet"), Path.Combine(_root, "input/adults.parquet"));
+
+        var schema = await _sut.DiscoverParquet("adults.parquet", _ct);
+
+        schema.Select(column => (column.Name, column.Type)).ShouldBe([
+            ("age", ColumnTypeRecord.Int64), ("full_name", ColumnTypeRecord.String)
+        ]);
+    }
+
+    [TestMethod]
+    public async Task DiscoverExcel_When_HeaderAndRowsExist_Then_InfersColumnTypes()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_root, "input/data.csv"), "age,name\n32,Ana\n25,Bia\n", _ct);
+        var export = Definition() with { Steps = [.. Definition().Steps[..^1], new ExcelOutputRecord("excel", "sample.xlsx", "Data")] };
+        await _sut.Execute(export, _ => Task.FromResult(false), _ct);
+        File.Copy(Path.Combine(_root, "output/sample.xlsx"), Path.Combine(_root, "input/sample.xlsx"));
+
+        var schema = await _sut.DiscoverExcel("sample.xlsx", "Data", true, _ct);
+
+        schema.Select(column => (column.Name, column.Type)).ShouldBe([
+            ("age", ColumnTypeRecord.Int64), ("full_name", ColumnTypeRecord.String)
+        ]);
     }
 
     [TestMethod]
@@ -149,6 +182,153 @@ public sealed class PipelineFilesTests
 
         result.RowsRead.ShouldBe(2);
         (await File.ReadAllTextAsync(Path.Combine(_root, "output/noheader.csv"), _ct)).Replace("\r\n", "\n").ShouldBe("age,full_name\n32,Ana\n25,Bia\n");
+    }
+
+    [TestMethod]
+    [DataRow("application/json", "{\"payload\":{\"items\":[{\"id\":7},{\"id\":8}]}}", "payload.items", "json")]
+    [DataRow("application/xml", "<root><items><item><id>7</id></item><item><id>8</id></item></items></root>", "root/items", "xml")]
+    public async Task Execute_When_ApiReturnsNestedJsonOrXml_Then_ExtractsRows(string contentType, string payload, string dataPath, string format)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var previousAllowedHosts = Environment.GetEnvironmentVariable("PipelineApi__AllowedHosts");
+        Environment.SetEnvironmentVariable("PipelineApi__AllowedHosts", "127.0.0.1");
+        var server = Task.Run(async () =>
+        {
+            for (var requestNumber = 0; requestNumber < 2; requestNumber++)
+            {
+                using var client = await listener.AcceptTcpClientAsync(_ct);
+                await using var stream = client.GetStream();
+                using var reader = new StreamReader(stream, Encoding.ASCII, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                string? line;
+                do { line = await reader.ReadLineAsync(_ct); } while (!string.IsNullOrEmpty(line));
+                var bytes = Encoding.UTF8.GetBytes(payload);
+                var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: {contentType}; charset=utf-8\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n");
+                await stream.WriteAsync(headers, _ct);
+                await stream.WriteAsync(bytes, _ct);
+            }
+        }, _ct);
+        try
+        {
+            var api = new ApiInputStep("api", $"http://127.0.0.1:{port}/items", [], dataPath, Format: format);
+            var discovery = await _sut.DiscoverApi(api, _ct);
+            discovery.Schema.Select(column => column.Name).ShouldBe(["id"]);
+            discovery.DataPaths.ShouldContain(format == "json" ? "payload.items" : "items");
+            var schema = discovery.Schema;
+            var definition = new DefinitionRecord(1, [
+                new ApiInputRecord("api", $"http://127.0.0.1:{port}/items", schema, dataPath, Format: format),
+                new CsvOutputRecord("out", "api.csv")
+            ]);
+
+            var result = await _sut.Execute(definition, _ => Task.FromResult(false), _ct);
+
+            result.RowsRead.ShouldBe(2);
+            result.RowsWritten.ShouldBe(2);
+            (await File.ReadAllTextAsync(Path.Combine(_root, "output/api.csv"), _ct)).Replace("\r\n", "\n").ShouldBe("id\n7\n8\n");
+            await server;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PipelineApi__AllowedHosts", previousAllowedHosts);
+            listener.Stop();
+        }
+    }
+
+    [TestMethod]
+    public async Task Execute_When_ApiUsesLinkHeaderPagination_Then_FollowsRelativeNextLink()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var previousAllowedHosts = Environment.GetEnvironmentVariable("PipelineApi__AllowedHosts");
+        Environment.SetEnvironmentVariable("PipelineApi__AllowedHosts", "127.0.0.1");
+        var server = Task.Run(async () =>
+        {
+            for (var page = 1; page <= 2; page++)
+            {
+                using var client = await listener.AcceptTcpClientAsync(_ct);
+                await using var stream = client.GetStream();
+                using var reader = new StreamReader(stream, Encoding.ASCII, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                var requestLine = await reader.ReadLineAsync(_ct);
+                string? line;
+                do { line = await reader.ReadLineAsync(_ct); } while (!string.IsNullOrEmpty(line));
+                requestLine!.ShouldContain(page == 1 ? "GET /items " : "GET /items?page=2 ");
+                var body = page == 1 ? "{\"items\":[{\"id\":1}]}" : "{\"items\":[{\"id\":2}]}";
+                var bytes = Encoding.UTF8.GetBytes(body);
+                var link = page == 1 ? $"Link: </items?page=2>; rel=\"next\"\r\n" : "";
+                var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {bytes.Length}\r\n{link}Connection: close\r\n\r\n");
+                await stream.WriteAsync(headers, _ct);
+                await stream.WriteAsync(bytes, _ct);
+            }
+        }, _ct);
+        try
+        {
+            var definition = new DefinitionRecord(1, [
+                new ApiInputRecord("api", $"http://127.0.0.1:{port}/items", [new("id", ColumnTypeRecord.Int64)], "items", UseLinkHeader: true),
+                new CsvOutputRecord("out", "pages.csv")
+            ]);
+
+            var result = await _sut.Execute(definition, _ => Task.FromResult(false), _ct);
+
+            result.RowsRead.ShouldBe(2);
+            (await File.ReadAllTextAsync(Path.Combine(_root, "output/pages.csv"), _ct)).Replace("\r\n", "\n").ShouldBe("id\n1\n2\n");
+            await server;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PipelineApi__AllowedHosts", previousAllowedHosts);
+            listener.Stop();
+        }
+    }
+
+    [TestMethod]
+    public async Task Execute_When_ApiContainsNestedArraysAndObjects_Then_FlattensRowsAndDiscoversFieldPaths()
+    {
+        const string payload = "{\"data\":{\"rows\":[[{\"customer\":{\"id\":7}},{\"customer\":{\"id\":8}}]]}}";
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var previousAllowedHosts = Environment.GetEnvironmentVariable("PipelineApi__AllowedHosts");
+        Environment.SetEnvironmentVariable("PipelineApi__AllowedHosts", "127.0.0.1");
+        var server = Task.Run(async () =>
+        {
+            for (var requestNumber = 0; requestNumber < 2; requestNumber++)
+            {
+                using var client = await listener.AcceptTcpClientAsync(_ct);
+                await using var stream = client.GetStream();
+                using var reader = new StreamReader(stream, Encoding.ASCII, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                string? line;
+                do { line = await reader.ReadLineAsync(_ct); } while (!string.IsNullOrEmpty(line));
+                var bytes = Encoding.UTF8.GetBytes(payload);
+                var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n");
+                await stream.WriteAsync(headers, _ct);
+                await stream.WriteAsync(bytes, _ct);
+            }
+        }, _ct);
+        try
+        {
+            var url = $"http://127.0.0.1:{port}/items";
+            var api = new ApiInputStep("api", url, [], "data.rows");
+            var discovery = await _sut.DiscoverApi(api, _ct);
+            discovery.Schema.Select(column => column.Name).ShouldBe(["customer.id"]);
+            discovery.DataPaths.ShouldContain("data.rows");
+
+            var result = await _sut.Execute(new DefinitionRecord(1, [
+                new ApiInputRecord("api", url, discovery.Schema, "data.rows"),
+                new CsvOutputRecord("out", "nested.csv")
+            ]), _ => Task.FromResult(false), _ct);
+
+            result.RowsRead.ShouldBe(2);
+            (await File.ReadAllTextAsync(Path.Combine(_root, "output/nested.csv"), _ct))
+                .Replace("\r\n", "\n").ShouldBe("customer.id\n7\n8\n");
+            await server;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PipelineApi__AllowedHosts", previousAllowedHosts);
+            listener.Stop();
+        }
     }
 
     [TestMethod]

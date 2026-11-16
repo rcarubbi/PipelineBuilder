@@ -46,4 +46,28 @@ public sealed class PipelineValidationTests
 
         result.Issues.ShouldContain(i => i.BlockId == "filter" && i.Message.Contains("constant"));
     }
+
+    [TestMethod]
+    public void Analyze_When_ApiInputUsesServerSecretReference_Then_AcceptsApiSource()
+    {
+        var pipeline = new PipelineDefinition(1, [
+            new ApiInputStep("api", "https://example.com/items", [new("id", ColumnType.Int64)],
+                Authentication: "bearer", Token: "${secret.API_TOKEN}", DataPath: "data.items"),
+            new CsvOutputStep("out", "items.csv")
+        ]);
+
+        PipelineValidation.Analyze(pipeline).Issues.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void Analyze_When_ApiInputContainsLiteralCredential_Then_RejectsIt()
+    {
+        var pipeline = new PipelineDefinition(1, [
+            new ApiInputStep("api", "https://example.com/items", [new("id", ColumnType.Int64)],
+                Authentication: "bearer", Token: "do-not-store"),
+            new CsvOutputStep("out", "items.csv")
+        ]);
+
+        PipelineValidation.Analyze(pipeline).Issues.ShouldContain(issue => issue.BlockId == "api" && issue.Message.Contains("server-side"));
+    }
 }

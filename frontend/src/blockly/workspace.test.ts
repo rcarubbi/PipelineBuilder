@@ -1,5 +1,5 @@
 import * as Blockly from 'blockly/core';
-import { compileWorkspace, definitionToWorkspace, schemaBefore, seedWorkspace } from './workspace';
+import { compileEnvironments, compileWorkspace, definitionToWorkspace, restoreEnvironmentBlocks, schemaBefore, seedWorkspace } from './workspace';
 import type { Definition } from '../pipeline/types';
 
 describe('pipeline workspace', () => {
@@ -20,6 +20,18 @@ describe('pipeline workspace', () => {
     workspace.clear();
     Blockly.serialization.workspaces.load(state, workspace);
     expect(compileWorkspace(workspace)).toEqual(expected);
+  });
+
+  it('migrates saved environment values into editable Blockly declaration blocks', () => {
+    const source = new Blockly.Workspace();
+    const state = Blockly.serialization.workspaces.save(source) as Record<string, unknown>;
+    source.dispose();
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(restoreEnvironmentBlocks(state, { test: { INPUT_FILE: 'orders.csv' } }), restored);
+      expect(compileEnvironments(restored)).toEqual({ test: { INPUT_FILE: 'orders.csv' } });
+      expect(restored.getBlocksByType('define_environment', false)).toHaveLength(1);
+    } finally { restored.dispose(); }
   });
 
   it('compiles and restores a CSV output block', () => {
@@ -58,6 +70,35 @@ describe('pipeline workspace', () => {
     expect(definition.steps[0]).toMatchObject({ type: inputType, schema: [{ name: 'name', type: 'string' }] });
     expect(definition.steps[1]).toMatchObject({ type: 'excelOutput', sheet: 'Results', hasHeader: true });
     if (inputType === 'excelInput') expect(definition.steps[0]).toMatchObject({ sheet: 'Source' });
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
+      expect(compileWorkspace(restored)).toEqual(definition);
+    } finally { restored.dispose(); }
+  });
+
+  it('compiles and restores API input with nested data path and OAuth settings', () => {
+    workspace.clear();
+    const input = workspace.newBlock('pipeline_apiInput');
+    input.data = JSON.stringify({
+      schema: [{ name: 'id', type: 'string', nullable: true, typeVariable: '${env.COLUMN_TYPE}', nullableVariable: '${env.COLUMN_NULLABLE}' }],
+      api: { url: 'https://example.com/items', dataPath: 'result.items', method: 'GET', methodVariable: '${var.API_METHOD}', format: 'json', authentication: 'oauth2',
+        oauthTokenUrl: 'https://example.com/token', clientId: 'client', clientSecret: '${secret.CLIENT_SECRET}', nextPath: 'links.next', useLinkHeader: true, useLinkHeaderVariable: '${env.LINK_HEADER}' },
+    });
+    const output = workspace.newBlock('pipeline_csvOutput');
+    output.data = JSON.stringify({ hasHeaderVariable: '${env.HAS_HEADER}' });
+    const path = workspace.newBlock('value_literal');
+    path.setFieldValue('items.csv', 'VALUE');
+    output.getInput('PATH')!.connection!.connect(path.outputConnection!);
+    input.nextConnection!.connect(output.previousConnection!);
+
+    const definition = compileWorkspace(workspace);
+    expect(definition.steps[0]).toMatchObject({
+      type: 'apiInput', url: 'https://example.com/items', dataPath: 'result.items', method: '${var.API_METHOD}', authentication: 'oauth2',
+      nextPath: 'links.next', useLinkHeader: true, useLinkHeaderVariable: '${env.LINK_HEADER}',
+      schema: [{ name: 'id', type: 'string', nullable: true, typeVariable: '${env.COLUMN_TYPE}', nullableVariable: '${env.COLUMN_NULLABLE}' }],
+    });
+    expect(definition.steps[1]).toMatchObject({ type: 'csvOutput', hasHeaderVariable: '${env.HAS_HEADER}' });
     const restored = new Blockly.Workspace();
     try {
       Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
@@ -157,15 +198,15 @@ describe('pipeline workspace', () => {
   });
 
   it('rebuilds map steps and nested filter expressions', () => {
-    const definition: Definition = { formatVersion: 1, steps: [
-      { type: 'csv', id: 'predicate-1', path: 'input.csv', delimiter: ',', hasHeader: true,
+    const definition: Definition = { formatVersion: 1, variables: [], steps: [
+      { type: 'csv', id: 'predicate-1', path: 'expression', pathExpression: { kind: 'literal', id: 'predicate-1-path', value: 'input.csv' }, delimiter: ',', hasHeader: true,
         schema: [{ name: 'age', type: 'int64', nullable: false, precision: 18, scale: 2 }] },
       { type: 'map', id: 'map', mappings: [{ source: 'age', target: { name: 'years', type: 'int64', nullable: false, precision: 18, scale: 2 }, format: null }] },
       { type: 'filter', id: 'filter', criteria: { kind: 'logical', operator: 'and', children: [
         { kind: 'null', column: 'years', isNull: false },
         { kind: 'logical', operator: 'not', children: [{ kind: 'compare', column: 'years', operator: 'less', value: '18' }] },
       ] } },
-      { type: 'parquet', id: 'parquet', path: 'output.parquet' },
+      { type: 'parquet', id: 'parquet', path: 'expression', pathExpression: { kind: 'literal', id: 'parquet-path', value: 'output.parquet' } },
     ] };
     const rebuilt = new Blockly.Workspace();
     try {

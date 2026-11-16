@@ -1,6 +1,10 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Xml;
+using System.Xml.Linq;
 using CsvHelper;
 using CsvHelper.Configuration;
 using ExcelReader.Core.Reader;
@@ -15,6 +19,11 @@ internal static class PipelineInputReader
 {
     public static async IAsyncEnumerable<Dictionary<string, object?>> Read(PipelineStep input, string path, [EnumeratorCancellation] CancellationToken ct)
     {
+        if (input is ApiInputStep api)
+        {
+            await foreach (var row in ApiInputReader.Read(api, ct)) yield return row;
+            yield break;
+        }
         if (input is CsvStep csvInput)
         {
             using var reader = new StreamReader(path, new UTF8Encoding(false, true));

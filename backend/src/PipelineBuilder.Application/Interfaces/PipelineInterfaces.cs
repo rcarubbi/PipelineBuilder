@@ -1,5 +1,6 @@
 using ErrorOr;
 using PipelineBuilder.Application.Contracts;
+using PipelineBuilder.Domain.Pipelines;
 
 namespace PipelineBuilder.Application.Interfaces;
 
@@ -31,8 +32,13 @@ public interface IDesignerQueries
 public interface IPipelineFiles
 {
     Task<ColumnRecord[]> Discover(string path, string delimiter, bool hasHeader, CancellationToken ct);
+    Task<ColumnRecord[]> DiscoverParquet(string path, CancellationToken ct);
+    Task<ColumnRecord[]> DiscoverExcel(string path, string sheet, bool hasHeader, CancellationToken ct);
+    Task<ApiSchemaDiscoveryRecord> DiscoverApi(ApiInputStep api, CancellationToken ct);
     Task<ExecutionResultRecord> Execute(DefinitionRecord definition, Func<CancellationToken, Task<bool>> isCancelled, CancellationToken ct);
 }
+
+public sealed record ApiSchemaDiscoveryRecord(ColumnRecord[] Schema, string[] DataPaths);
 
 public sealed class PipelineDataException(string message, string? blockId = null, Exception? inner = null) : Exception(message, inner)
 {

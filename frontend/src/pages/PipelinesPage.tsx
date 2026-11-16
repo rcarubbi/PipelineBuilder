@@ -15,6 +15,7 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
   const [list, setList] = useState<PipelineList | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [scheduling, setScheduling] = useState<{ pipelineId: string; alias: string; environments: string[] } | null>(null);
+  const [expandedScheduleId, setExpandedScheduleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -50,8 +51,9 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
   }
 
   function startScheduling(pipeline: PipelineSummary) {
-    if (scheduling?.pipelineId === pipeline.id) setScheduling(null);
-    else selectSchedule(pipeline, schedules[0]?.alias ?? '');
+    if (expandedScheduleId === pipeline.id) { setExpandedScheduleId(null); return; }
+    if (scheduling?.pipelineId !== pipeline.id) selectSchedule(pipeline, schedules[0]?.alias ?? '');
+    setExpandedScheduleId(pipeline.id);
   }
 
   /** Applies the checked environments for the chosen schedule: adds new ones and removes unchecked ones. */
@@ -67,7 +69,7 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
       setMessage(scheduling.environments.length
         ? `${pipeline.name} runs on schedule ${scheduling.alias} in: ${scheduling.environments.join(', ')}.`
         : `${pipeline.name} removed from schedule ${scheduling.alias}.`);
-      setScheduling(null);
+      setScheduling(null); setExpandedScheduleId(null);
     } catch (ex) { setError(ex instanceof Error ? ex.message : 'Could not update the schedule.'); }
     finally { setBusy(false); setRefresh(n => n + 1); }
   }
@@ -151,8 +153,8 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
                 </li>)}</ul>}</td>
               <td><div className="actions">
                 <IconButton icon="play" label={`Run ${pipeline.name}`} disabled={busy || pipeline.environments.length === 0} onClick={() => void run(pipeline)} />
-                <IconButton icon="clock" label={`Schedule ${pipeline.name}`} aria-expanded={scheduling?.pipelineId === pipeline.id} disabled={busy}
-                  onClick={() => startScheduling(pipeline)} />
+                 <IconButton icon="clock" label={`Schedule ${pipeline.name}`} aria-expanded={expandedScheduleId === pipeline.id} disabled={busy}
+                   onClick={() => startScheduling(pipeline)} />
                 <IconButton icon="export" label={`Export ${pipeline.name} as JSON`} disabled={busy} onClick={() => void exportPipeline(pipeline.id)} />
                 <IconLink icon="logs" label={`View logs for ${pipeline.name}`} href={`?page=logs&pipeline=${pipeline.id}`} />
                 <IconLink icon="edit" label={`Open ${pipeline.name} in designer`} href={`?page=designer&pipeline=${pipeline.id}`} onClick={event => {
@@ -161,8 +163,10 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
                 <IconButton icon="trash" label={`Delete ${pipeline.name}`} className="danger" disabled={busy} onClick={() => setDeleting(pipeline)} />
               </div></td>
             </tr>
-            {scheduling?.pipelineId === pipeline.id && <tr className="schedule-row"><td colSpan={5}>
-              {schedules.length === 0 ? <p>No schedules exist yet. <a href="?page=schedules">Create a schedule</a> first.</p> :
+            <tr className={`schedule-row${expandedScheduleId === pipeline.id ? ' is-open' : ''}`} aria-hidden={expandedScheduleId !== pipeline.id}>
+              <td colSpan={5}><div className="schedule-disclosure" inert={expandedScheduleId !== pipeline.id}>
+                <div className="schedule-disclosure-content">
+              {scheduling?.pipelineId === pipeline.id && (schedules.length === 0 ? <p>No schedules exist yet. <a href="?page=schedules">Create a schedule</a> first.</p> :
                 <div className="actions" role="group" aria-label={`Add ${pipeline.name} to a schedule`}>
                   <label>Schedule<select value={scheduling.alias} onChange={e => selectSchedule(pipeline, e.target.value)}>
                     {schedules.map(schedule => <option key={schedule.id} value={schedule.alias}>{schedule.alias} — {describe(schedule.cronExpression)}</option>)}
@@ -176,9 +180,11 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
                   <IconButton icon="save" label={`Save ${pipeline.name} schedule environments`} className="primary"
                     disabled={busy || !scheduling.alias || sameEnvironments(scheduling.environments, attachedEnvironments(scheduling.alias, pipeline.id))}
                     onClick={() => void saveScheduling(pipeline)} />
-                  <IconButton icon="cancel" label="Cancel scheduling" disabled={busy} onClick={() => setScheduling(null)} />
-                </div>}
-            </td></tr>}
+                  <IconButton icon="cancel" label="Cancel scheduling" disabled={busy} onClick={() => { setExpandedScheduleId(null); setScheduling(null); }} />
+                </div>)}
+                </div>
+              </div></td>
+            </tr>
             </Fragment>)}</tbody>
           </table>
         </div>}

@@ -1,11 +1,14 @@
 export const columnTypes = ['string', 'boolean', 'int64', 'decimal', 'double', 'date', 'timestamp'] as const;
 export type ColumnType = typeof columnTypes[number];
-export interface Column { name: string; type: ColumnType; nullable: boolean; precision?: number; scale?: number }
+export interface Column {
+  name: string; type: ColumnType; nullable: boolean; precision?: number; scale?: number;
+  typeVariable?: string; nullableVariable?: string; precisionVariable?: string; scaleVariable?: string;
+}
 export interface Mapping { source: string; target: Column; format?: string | null }
 export type ComparisonOperator = 'equal' | 'notEqual' | 'greater' | 'greaterOrEqual' | 'less' | 'lessOrEqual';
 export type Predicate =
-  | { kind: 'compare'; column: string; operator: ComparisonOperator; value: string; columnExpression?: TextExpression; valueExpression?: TextExpression }
-  | { kind: 'null'; column: string; isNull: boolean }
+  | { kind: 'compare'; column: string; operator: ComparisonOperator; value: string; columnExpression?: TextExpression; valueExpression?: TextExpression; operatorVariable?: string }
+  | { kind: 'null'; column: string; isNull: boolean; isNullVariable?: string }
   | { kind: 'logical'; operator: 'and' | 'or' | 'not'; children: Predicate[] };
 export type TextExpression =
   | { kind: 'literal'; id: string; value: string }
@@ -13,14 +16,15 @@ export type TextExpression =
   | { kind: 'variable' | 'environment'; id: string; name: string }
   | { kind: 'utc'; id: string; format: string; formatExpression?: TextExpression };
 export type Step =
-  | { type: 'csv'; id: string; path: string; pathExpression?: TextExpression; delimiter: string; hasHeader: boolean; schema: Column[] }
+  | { type: 'csv'; id: string; path: string; pathExpression?: TextExpression; delimiter: string; hasHeader: boolean; hasHeaderVariable?: string; schema: Column[] }
   | { type: 'parquetInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[] }
-  | { type: 'excelInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[]; sheet: string; hasHeader: boolean }
+  | { type: 'excelInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[]; sheet: string; hasHeader: boolean; hasHeaderVariable?: string }
+  | { type: 'apiInput'; id: string; url: string; schema: Column[]; dataPath: string; method: string; format: string; authentication: string; username?: string; password?: string; token?: string; apiKeyName?: string; apiKey?: string; oauthTokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; nextPath?: string; useLinkHeader: boolean; useLinkHeaderVariable?: string; body?: string; headers?: Record<string, string> }
   | { type: 'map'; id: string; mappings: Mapping[] }
   | { type: 'filter'; id: string; criteria: Predicate }
   | { type: 'parquet'; id: string; path: string; pathExpression?: TextExpression }
-  | { type: 'csvOutput'; id: string; path: string; pathExpression?: TextExpression; delimiter: string; hasHeader: boolean }
-  | { type: 'excelOutput'; id: string; path: string; pathExpression?: TextExpression; sheet: string; hasHeader: boolean };
+  | { type: 'csvOutput'; id: string; path: string; pathExpression?: TextExpression; delimiter: string; hasHeader: boolean; hasHeaderVariable?: string }
+  | { type: 'excelOutput'; id: string; path: string; pathExpression?: TextExpression; sheet: string; hasHeader: boolean; hasHeaderVariable?: string };
 export interface Definition { formatVersion: 1; steps: Step[]; variables?: { name: string; value: TextExpression }[] }
 export interface PipelineDocument {
   name: string;
@@ -51,7 +55,7 @@ export function inferSchemas(definition: Definition): Analysis['schemas'] {
   let current: Column[] = [];
   return definition.steps.map(step => {
     const input = current;
-    if (step.type === 'csv' || step.type === 'parquetInput' || step.type === 'excelInput') current = step.schema;
+    if (step.type === 'csv' || step.type === 'parquetInput' || step.type === 'excelInput' || step.type === 'apiInput') current = step.schema;
     if (step.type === 'map') current = step.mappings.map(m => m.target);
     return { blockId: step.id, input, output: step.type === 'parquet' || step.type === 'csvOutput' || step.type === 'excelOutput' ? [] : current };
   });

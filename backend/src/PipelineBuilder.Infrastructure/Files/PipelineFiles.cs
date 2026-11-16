@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using CsvHelper;
 using CsvHelper.Configuration;
+using ExcelReader.Core.Reader;
 using Parquet;
 using Parquet.Schema;
 using PipelineBuilder.Application.Contracts;
@@ -39,20 +40,80 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
         }
     }
 
+    public async Task<ColumnRecord[]> DiscoverParquet(string path, CancellationToken ct)
+    {
+        var file = paths.Input(path);
+        try
+        {
+            await using var reader = await ParquetReader.CreateAsync(file, cancellationToken: ct);
+            var fields = reader.Schema.DataFields;
+            if (fields.Length is < 1 or > 200 || fields.Select(f => f.Name).Distinct(StringComparer.Ordinal).Count() != fields.Length)
+                throw new PipelineDataException("Parquet needs 1 to 200 uniquely named columns.");
+            return fields.Select(field => new ColumnRecord(field.Name, field.ClrType switch
+            {
+                var type when type == typeof(bool) => ColumnTypeRecord.Boolean,
+                var type when type == typeof(byte) || type == typeof(short) || type == typeof(int) || type == typeof(long) => ColumnTypeRecord.Int64,
+                var type when type == typeof(decimal) => ColumnTypeRecord.Decimal,
+                var type when type == typeof(float) || type == typeof(double) => ColumnTypeRecord.Double,
+                var type when type == typeof(DateTime) => ColumnTypeRecord.Timestamp,
+                _ => ColumnTypeRecord.String
+            }, field.IsNullable)).ToArray();
+        }
+        catch (PipelineDataException) { throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new PipelineDataException("Cannot discover Parquet schema. Check file access and format.", inner: ex);
+        }
+    }
+
+    public async Task<ColumnRecord[]> DiscoverExcel(string path, string sheetName, bool hasHeader, CancellationToken ct)
+    {
+        try
+        {
+            await using var workbook = await Excel.OpenAsync(paths.Input(path), ct: ct);
+            if (!workbook.TryGetSheet(sheetName, out var sheet)) throw new PipelineDataException("Excel sheet not found.");
+            using var reader = new SheetDataReader(sheet, new SheetDataReaderOptions { HeaderRow = hasHeader ? 1 : 0 });
+            var count = reader.FieldCount;
+            if (count is < 1 or > 200) throw new PipelineDataException("Excel sheet needs 1 to 200 columns.");
+            var names = Enumerable.Range(0, count).Select(i => hasHeader ? reader.GetName(i) : $"column{i + 1}").ToArray();
+            if (names.Any(string.IsNullOrWhiteSpace) || names.Distinct(StringComparer.Ordinal).Count() != names.Length)
+                throw new PipelineDataException("Excel needs nonempty, unique column names.");
+            List<string?[]> sample = [];
+            while (sample.Count < 100 && reader.Read())
+            {
+                ct.ThrowIfCancellationRequested();
+                sample.Add(Enumerable.Range(0, count).Select(i =>
+                {
+                    var value = reader.GetValue(i);
+                    return value is null or DBNull ? null : ValueConversion.Format(value);
+                }).ToArray());
+            }
+            if (sample.Count == 0) throw new PipelineDataException("Excel sheet has no data rows.");
+            return names.Select((name, index) => Infer(name, sample.Select(row => row[index]).ToArray())).ToArray();
+        }
+        catch (PipelineDataException) { throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new PipelineDataException("Cannot discover Excel schema. Check file access, format and sheet name.", inner: ex);
+        }
+    }
+
+    public Task<ApiSchemaDiscoveryRecord> DiscoverApi(ApiInputStep api, CancellationToken ct) => ApiInputReader.Discover(api, ct);
+
     public async Task<ExecutionResultRecord> Execute(DefinitionRecord definition, Func<CancellationToken, Task<bool>> isCancelled, CancellationToken ct)
     {
         var pipeline = definition.MapTo();
         var analysis = PipelineValidation.Analyze(pipeline);
         if (analysis.Issues.Length > 0) throw new PipelineDataException("Run snapshot has an invalid definition.");
         var input = pipeline.Steps[0];
-        var inputPathExpression = input switch { CsvStep csv => csv.Path, ParquetInputStep parquet => parquet.Path, ExcelInputStep excel => excel.Path, _ => throw new PipelineDataException("Unsupported input.") };
+        var inputPathExpression = input switch { CsvStep csv => csv.Path, ParquetInputStep parquet => parquet.Path, ExcelInputStep excel => excel.Path, ApiInputStep api => api.Url, _ => throw new PipelineDataException("Unsupported input.") };
         var output = pipeline.Steps[^1];
         var outputPathExpression = output switch { ParquetStep parquet => parquet.Path, CsvOutputStep csv => csv.Path, ExcelOutputStep excel => excel.Path, _ => throw new PipelineDataException("Unsupported output.") };
         string? temporary = null;
         var activeBlock = input.Id;
         try
         {
-            var inputPath = paths.Input(inputPathExpression);
+            var inputPath = input is ApiInputStep ? inputPathExpression : paths.Input(inputPathExpression);
             string outputPath;
             try { outputPath = paths.Output(outputPathExpression); }
             catch (PipelineDataException ex) { throw new PipelineDataException(ex.Message, output.Id, ex); }
@@ -143,6 +204,14 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
         {
             throw new PipelineDataException("File processing failed. Check the file format, schema, sheet name and supported value types.", activeBlock, ex);
         }
+        catch (HttpRequestException ex)
+        {
+            throw new PipelineDataException("API request failed. Check destination connectivity and retry later.", activeBlock, ex);
+        }
+        catch (OperationCanceledException ex) when (input is ApiInputStep && !ct.IsCancellationRequested)
+        {
+            throw new PipelineDataException("API request exceeded its timeout.", activeBlock, ex);
+        }
         finally
         {
             if (temporary is not null && File.Exists(temporary)) File.Delete(temporary);
@@ -167,7 +236,7 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
     private static string[] ReadHeader(CsvReader csv) { csv.ReadHeader(); return csv.HeaderRecord!; }
     private static string?[] ReadFields(CsvReader csv, int count) => Enumerable.Range(0, count).Select(csv.GetField).ToArray();
 
-    private static ColumnRecord Infer(string name, string?[] values)
+    internal static ColumnRecord Infer(string name, string?[] values)
     {
         var present = values.Where(v => !string.IsNullOrEmpty(v)).ToArray();
         var nullable = present.Length != values.Length || present.Length == 0;
