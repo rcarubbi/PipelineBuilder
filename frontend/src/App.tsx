@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as Blockly from 'blockly/core';
 import { BlockEditor, type EditorHandle } from './blockly/BlockEditor';
-import { compileEnvironments, compileWorkspace, getBlockData, restoreEnvironmentBlocks, schemaBefore } from './blockly/workspace';
+import { compileEnvironments, compileWorkspace, getBlockData, resolveWorkspaceText, restoreEnvironmentBlocks, schemaBefore } from './blockly/workspace';
 import { BlockProperties } from './components/BlockProperties';
 import { Icon, IconButton, IconLink } from './components/Icon';
 import { PageHeader } from './components/PageHeader';
@@ -10,14 +10,15 @@ import { Loading } from './components/Loading';
 import { Input } from './components/ui/input';
 import { Select } from './components/ui/select';
 import { Button } from './components/ui/button';
-import { Alert } from './components/ui/alert';
 import { Card } from './components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
+import { Toast, Toaster } from './components/Toast';
 import { api } from './pipeline/api';
 import { inferSchemas, type Analysis, type Definition, type Run, type SavedPipeline } from './pipeline/types';
 
 export function App({ pipelineId, initialPipeline }: { pipelineId?: string; initialPipeline?: SavedPipeline }) {
   const editor = useRef<EditorHandle>(null);
+  const designer = useRef<HTMLDivElement>(null);
   const [id] = useState(pipelineId ?? crypto.randomUUID());
   const [revision, setRevision] = useState(initialPipeline?.revision ?? 0);
   const [name, setName] = useState(initialPipeline?.document.name ?? 'New pipeline');
@@ -63,7 +64,7 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
   const schemas = definition ? (analysis?.schemas ?? inferSchemas(definition)) : [];
   const selectedSchema = schemas.find(s => s.blockId === selectedId) ?? (selected ? {
     input: schemaBefore(selected),
-    output: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput'].includes(selected.type) ? getBlockData(selected).schema ?? []
+    output: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_postgresInput'].includes(selected.type) ? getBlockData(selected).schema ?? []
       : selected.type === 'pipeline_map' ? (getBlockData(selected).mappings ?? []).map(m => m.target)
         : ['pipeline_parquet', 'pipeline_csvOutput', 'pipeline_excelOutput'].includes(selected.type) ? [] : schemaBefore(selected),
   } : null);
@@ -113,7 +114,23 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
   }
 
   async function discover() {
-    if (!selected || !['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'].includes(selected.type)) return;
+    if (!selected || !['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput', 'pipeline_postgresInput'].includes(selected.type)) return;
+    if (selected.type === 'pipeline_postgresInput') {
+      const configuration = getBlockData(selected);
+      const postgres = configuration.postgres ?? {};
+      const workspace = editor.current!.workspace();
+      const resolve = (name: string, defaultValue = '') => resolveWorkspaceText(
+        String(postgres[`${name}Variable`] || postgres[name] || defaultValue), workspace, workspaceEnvironments, environment);
+      const result = await api.discover('', ',', true, 'postgres', undefined, undefined, {
+        type: 'postgresInput', id: selected.id, host: resolve('host', 'localhost'), port: resolve('port', '5432'),
+        database: resolve('database'), username: resolve('username'), password: resolve('password'),
+        sslMode: resolve('sslMode', 'Prefer'), query: resolve('query'), schema: [],
+      });
+      selected.data = JSON.stringify({ ...configuration, schema: result.schema });
+      refresh();
+      setMessage('PostgreSQL schema discovered. Review the columns and save the pipeline.');
+      return;
+    }
     if (selected.type === 'pipeline_apiInput') {
       const configuration = getBlockData(selected);
       const apiConfig = configuration.api ?? {};
@@ -203,10 +220,25 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
     return () => document.removeEventListener('click', listener);
   }, [dirty]);
 
+  useLayoutEffect(() => {
+    const element = designer.current;
+    const main = element?.closest('main');
+    if (!element || !main) return;
+    const resize = () => {
+      const bottomPadding = Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
+      element.style.height = `${Math.max(0, window.innerHeight - element.getBoundingClientRect().top - bottomPadding - 16)}px`;
+    };
+    resize();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
+    observer?.observe(main);
+    window.addEventListener('resize', resize);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', resize); };
+  }, [loading, initialWorkspace]);
+
   if (loading || pipelineId && !initialWorkspace) return <>
     <PageHeader page="Designer" />
     <main><IconLink icon="list" label="Back to pipelines" href="/" />
-      {loading ? <Loading label="Loading pipeline…" /> : <p role="alert" className="notice error">{error}</p>}
+      {loading ? <Loading label="Loading pipeline…" /> : <Toaster><Toast key={`load-error:${error}`} variant="destructive">{error}</Toast></Toaster>}
     </main>
   </>;
 
@@ -229,11 +261,13 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
         </div>
         <span className="muted">Revision {revision} · {dirty ? 'unsaved changes' : 'saved'}</span>
       </Card>
-      {error && <Alert role="alert" variant="destructive" className="notice">{error}</Alert>}
-      {designError && <Alert className="notice">{designError}</Alert>}
-      {message && <Alert className="notice">{message}</Alert>}
-      {runNotice && <Alert className="notice">Run {runNotice} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(id)}`}>execution logs</a>.</Alert>}
-      <div className={`designer${propertiesOpen ? '' : ' properties-collapsed'}`}>
+      {(error || designError || message || runNotice) && <Toaster>
+        {error && <Toast key={`error:${error}`} variant="destructive">{error}</Toast>}
+        {designError && <Toast key={`design:${designError}`}>{designError}</Toast>}
+        {message && <Toast key={`message:${message}`}>{message}</Toast>}
+        {runNotice && <Toast key={`run:${runNotice}`}>Run {runNotice} queued. Results are available in <a className="toast-link" href={`?page=logs&pipeline=${encodeURIComponent(id)}`}>execution logs</a>.</Toast>}
+      </Toaster>}
+      <div ref={designer} className={`designer${propertiesOpen ? '' : ' properties-collapsed'}`}>
         <section className="workspace">
           <Tabs className="designer-tabs" value={view} onValueChange={value => setView(value as 'canvas' | 'json')}>
             <div className="view-switch">
@@ -277,8 +311,8 @@ export function App({ pipelineId, initialPipeline }: { pipelineId?: string; init
         </aside>
       </div>
       {analysis && analysis.issues.length > 0 && <section aria-label="Validation issues"><h2>Validation issues</h2><ul>{analysis.issues.map((issue, index) => <li key={index}><Button variant="ghost" onClick={() => { const block = editor.current!.workspace().getBlockById(issue.blockId); block?.select(); setSelectedId(issue.blockId); }}>{issue.message}</Button></li>)}</ul></section>}
-      {leaveUrl && <ConfirmDialog title="Leave designer?" description="Your unsaved changes will be lost." confirmLabel="Leave without saving" onCancel={() => setLeaveUrl(null)} onConfirm={() => { allowUnload.current = true; window.location.assign(leaveUrl); }} />}
-      {deletingBlock && <ConfirmDialog title="Remove step?" description="This step will be removed from the pipeline." confirmLabel="Remove step" onCancel={() => setDeletingBlock(null)} onConfirm={() => { editor.current?.workspace().getBlockById(deletingBlock)?.dispose(true); setDeletingBlock(null); setSelectedId(null); refresh(); }} />}
+      <ConfirmDialog open={!!leaveUrl} title="Leave designer?" description="Your unsaved changes will be lost." confirmLabel="Leave without saving" onCancel={() => setLeaveUrl(null)} onConfirm={() => { if (leaveUrl) { allowUnload.current = true; window.location.assign(leaveUrl); } }} />
+      <ConfirmDialog open={!!deletingBlock} title="Remove step?" description="This step will be removed from the pipeline." confirmLabel="Remove step" onCancel={() => setDeletingBlock(null)} onConfirm={() => { if (!deletingBlock) return; editor.current?.workspace().getBlockById(deletingBlock)?.dispose(true); setDeletingBlock(null); setSelectedId(null); refresh(); }} />
     </main>
   </>;
 }

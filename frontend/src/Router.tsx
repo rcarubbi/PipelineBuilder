@@ -5,6 +5,7 @@ import type { SavedPipeline } from './pipeline/types';
 import { ExecutionLogsPage } from './pages/ExecutionLogsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
 import { SchedulesPage } from './pages/SchedulesPage';
+import { Toast, Toaster } from './components/Toast';
 
 const Designer = lazy(() => import('./App').then(module => ({ default: module.App })));
 
@@ -40,5 +41,5 @@ export function Router() {
   if (parameters.get('page') === 'schedules') return <SchedulesPage />;
   if (parameters.get('page') === 'designer' || parameters.has('pipeline'))
     return <Suspense fallback={<Loading label="Loading designer…" />}><Designer pipelineId={parameters.get('pipeline') ?? undefined} /></Suspense>;
-  return <><PipelinesPage onOpenDesigner={openDesigner} />{openError && <p role="alert" className="notice error">{openError}</p>}{opening && <Loading label="Loading designer…" />}</>;
+  return <><PipelinesPage onOpenDesigner={openDesigner} />{openError && <Toaster><Toast key={`error:${openError}`} variant="destructive">{openError}</Toast></Toaster>}{opening && <Loading label="Loading designer…" />}</>;
 }

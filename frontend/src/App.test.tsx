@@ -231,6 +231,8 @@ it('still saves and starts a run with feedback outside the removed panel', async
   await userEvent.setup().click(screen.getByRole('button', { name: 'Save & run' }));
 
   expect(api.run).toHaveBeenCalledWith(saved.id, 4, 'test');
-  expect(await screen.findByRole('status')).toHaveTextContent('Run run-1 queued. Results are available in execution logs.');
+  const toast = await screen.findByRole('status');
+  expect(toast).toHaveTextContent('Run run-1 queued. Results are available in execution logs.');
+  expect(toast.closest('.toast-container')).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Run' })).not.toBeInTheDocument();
 });

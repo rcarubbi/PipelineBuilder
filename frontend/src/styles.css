@@ -51,6 +51,8 @@ body { margin: 0; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1.3rem 2rem; background: #152341; color: white; }
 h1 { margin: 0; font-size: 1.6rem; } h2 { font-size: 1.1rem; } h3 { font-size: .9rem; text-transform: capitalize; }
 .page-subtitle { margin: .2rem 0 0; color: #d7e0f3; font-size: 1rem; }
+.page-context { margin: .3rem 0 0; color: white; font-size: .9rem; font-weight: 600; }
+.page-context code { font-size: .95rem; }
 main { padding: 1rem 2rem 3rem; max-width: 1800px; margin: auto; }
 button, input, select, textarea { font: inherit; }
 button, a.icon-button { cursor: pointer; border: 1px solid hsl(var(--border)); border-radius: .5rem; background: hsl(var(--card)); color: hsl(var(--foreground)); padding: .5rem .75rem; font-weight: 500; transition: background-color .15s, border-color .15s, box-shadow .15s; }
@@ -88,7 +90,19 @@ main { animation: page-enter .24s ease-out both; }
 @media (prefers-reduced-motion: reduce) {
   .loading-spinner, .button-spinner, .loading-overlay, main, .canvas-panel:not([hidden]), .json-panel, ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
 }
-.confirm-dialog { width: min(440px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; }
+.ui-dialog-content { max-height: calc(100dvh - 2rem); overflow: auto; }
+.ui-dialog-overlay[data-state="open"] { animation: dialog-fade-in 220ms ease-out both; }
+.ui-dialog-overlay[data-state="closed"] { animation: dialog-fade-out 160ms ease-in both; }
+.ui-dialog-content[data-state="open"] { animation: dialog-enter 220ms cubic-bezier(.2, .8, .2, 1) both; }
+.ui-dialog-content[data-state="closed"] { animation: dialog-exit 160ms ease-in both; pointer-events: none; }
+@keyframes dialog-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes dialog-enter { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes dialog-exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(4px) scale(.98); } }
+@media (prefers-reduced-motion: reduce) { .ui-dialog-overlay, .ui-dialog-content { animation: none !important; } }
+.confirm-dialog, .blockly-dialog { width: min(440px, calc(100vw - 2rem)); }
+.blockly-dialog form { display: grid; gap: 1rem; min-width: 0; }
+.blockly-dialog label, .blockly-dialog .dialog-actions { margin: 0; }
 .confirm-dialog h2 { margin: .8rem 0 .4rem; font-size: 1.2rem; }
 .confirm-dialog p { color: #52617a; margin: 0; }
 .dialog-marker { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #fff1ee; color: #a52c21; font-weight: 700; }
@@ -98,7 +112,7 @@ button.dialog-danger:hover { background: #842318; }
 .error { background: #fff0ef; border-color: #a52c21; }
 /* Fixed-height designer: the properties panel scrolls instead of stretching the row past the canvas. */
 .designer { display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(0, 1fr);
-  height: clamp(480px, calc(100vh - 220px), 760px); border: 1px solid #b6c1d6; border-radius: 8px; overflow: hidden; background: white;
+  min-height: 0; border: 1px solid #b6c1d6; border-radius: 8px; overflow: hidden; background: white;
   transition: grid-template-columns 320ms cubic-bezier(.2, .8, .2, 1); }
 .designer.properties-collapsed { grid-template-columns: minmax(0, 1fr) 0px; }
 .designer aside { min-width: 0; overflow-x: hidden; overflow-y: auto; transition: padding 320ms ease, opacity 220ms ease, border-color 320ms ease, transform 320ms ease; }
@@ -123,6 +137,14 @@ button.dialog-danger:hover { background: #842318; }
 .switch-field > span, .environment-switch > span { cursor: pointer; }
 .field-control { margin: 0; }
 .designer.properties-collapsed aside { padding: 0; opacity: 0; overflow: hidden; border-color: transparent; transform: translateX(12px); }
+.toast-container { position: fixed; z-index: 1100; top: 1rem; right: 1rem; display: grid; gap: .5rem; width: min(440px, calc(100vw - 2rem)); }
+.toast-container > * { margin: 0; box-shadow: 0 8px 24px #0f172a24; }
+.designer-toast { opacity: 0; transform: translateY(-8px); transition: opacity 180ms ease, transform 180ms ease; }
+.designer-toast.is-visible { opacity: 1; transform: translateY(0); }
+.designer-toast.is-exiting { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+.toast-link { color: #1746b0; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; transition: color .15s, text-decoration-thickness .15s; }
+.toast-link:hover { color: #102f7a; text-decoration-thickness: 2px; }
+@media (prefers-reduced-motion: reduce) { .designer-toast { transition: none; } }
 .properties-toggle { margin-left: auto; }
 .workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .designer-tabs { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
@@ -155,7 +177,10 @@ code { overflow-wrap: anywhere; }
 .run-ok { color: #166534; background: #f0fdf4; border-color: #15803d; }
 .run-failure { color: #991b1b; background: #fff1f2; border-color: #b91c1c; }
 .run-pending { color: #374151; background: #f3f4f6; border-color: #6b7280; }
-.history-pagination { margin-top: 1rem; }
+.pagination { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+.pagination-controls, .pagination-pages, .pagination-item { display: inline-flex; align-items: center; gap: .3rem; }
+.pagination-item > span { color: hsl(var(--muted-foreground)); }
+@media (max-width: 520px) { .pagination { justify-content: center; } .pagination > .muted { flex-basis: 100%; text-align: center; } }
 .schedule-layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 1rem; align-items: start; }
 .panel { background: white; padding: 1rem; border: 1px solid #b6c1d6; border-radius: 8px; }
 .panel h2 { margin-top: 0; }
@@ -163,6 +188,9 @@ code { overflow-wrap: anywhere; }
 .weekday-picker .switch-field { width: auto; }
 .schedule-preview { background: #f3f6fc; border-left: 4px solid #244fc8; padding: .5rem .8rem; margin: .7rem 0; }
 .schedule-preview p, .schedule-preview ol { margin: .3rem 0; }
+.schedule-mode-panel { display: grid; grid-template-rows: 0fr; opacity: 0; transform: translateY(-4px); transition: grid-template-rows 260ms cubic-bezier(.2, .8, .2, 1), opacity 180ms ease, transform 260ms ease; }
+.schedule-mode-panel.is-active { grid-template-rows: 1fr; opacity: 1; transform: translateY(0); }
+.schedule-mode-content { min-height: 0; overflow: hidden; }
 .field-error { color: #991b1b; }
 .environment-header { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; flex-wrap: wrap; margin-top: .6rem; }
 .environment-panel summary { font-weight: 600; }
@@ -190,10 +218,10 @@ ul.compact, ol.compact { margin: 0; padding-left: 1.1rem; }
 .environment-choices { align-items: center; }
 .environment-switch { margin: .25rem .75rem .25rem 0; }
 @media (max-width: 1000px) { main { padding: 1rem; } .designer, .schedule-layout { grid-template-columns: minmax(0, 1fr); }
-  .designer { height: auto; grid-template-rows: auto; } .canvas-panel, .json-panel { height: 480px; flex: none; }
+  .designer { grid-template-rows: minmax(0, 1fr) auto; } .canvas-panel, .json-panel { flex: 1; }
   .designer.properties-collapsed { grid-template-columns: minmax(0, 1fr); }
   .designer aside { max-height: min(70vh, 800px); transition: max-height 320ms ease, padding 320ms ease, opacity 220ms ease, border-color 320ms ease; }
   .designer.properties-collapsed aside { max-height: 0; border-width: 0; }
   aside { border-left: 0; border-top: 1px solid #b6c1d6; } header { padding: 1rem; flex-wrap: wrap; } }
-@media (prefers-reduced-motion: reduce) { .designer, .designer aside, .schedule-disclosure, .schedule-row td, .variable-mode-panel, .ui-switch, .ui-switch-thumb { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .designer, .designer aside, .schedule-disclosure, .schedule-row td, .schedule-mode-panel, .variable-mode-panel, .ui-switch, .ui-switch-thumb { transition: none; } }
 }

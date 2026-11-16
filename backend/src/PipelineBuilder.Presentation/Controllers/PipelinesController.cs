@@ -24,7 +24,7 @@ public sealed class PipelinesController(
 
     [HttpGet]
     public async Task<ActionResult<PipelineListResponse>> List(CancellationToken ct, [FromQuery] int page = 1) =>
-        Respond(await list.Handle(new(page), ct), output => new PipelineListResponse(output.Pipelines.Select(PipelineSummaryResponse.MapFrom).ToArray(), output.Page, output.HasMore));
+        Respond(await list.Handle(new(page), ct), output => new PipelineListResponse(output.Pipelines.Select(PipelineSummaryResponse.MapFrom).ToArray(), output.Page, output.HasMore, output.TotalCount));
 
     [HttpDelete("{id:guid}")]
     public async Task<ActionResult<DeletePipelineResponse>> Delete(Guid id, [FromQuery] int revision, CancellationToken ct) =>

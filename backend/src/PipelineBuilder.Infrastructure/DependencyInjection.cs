@@ -4,7 +4,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Mvc;
+using System.Net.Sockets;
 using TickerQ.Dashboard.DependencyInjection;
+using Npgsql;
+using Polly;
+using Polly.Registry;
+using Polly.Retry;
 using PipelineBuilder.Infrastructure.Dashboard;
 using PipelineBuilder.Application.Interfaces;
 using PipelineBuilder.Infrastructure.Files;
@@ -22,10 +27,23 @@ public static class DependencyInjection
     {
         // TickerQ 2.x's generated module initializers overwrite registrations from other assemblies.
         TickerQInstanceFactory.Initialize();
+        services.AddResiliencePipeline("postgres-input", builder => builder.AddRetry(new RetryStrategyOptions
+        {
+            MaxRetryAttempts = 2,
+            Delay = TimeSpan.FromMilliseconds(250),
+            MaxDelay = TimeSpan.FromSeconds(2),
+            BackoffType = DelayBackoffType.Exponential,
+            UseJitter = true,
+            ShouldHandle = new PredicateBuilder()
+                .Handle<NpgsqlException>(exception => exception.IsTransient)
+                .Handle<SocketException>()
+                .Handle<TimeoutException>()
+        }));
         services.AddOptions<PipelineFileOptions>().BindConfiguration("Files").ValidateDataAnnotations().ValidateOnStart();
         services.AddOptions<PipelineWorkerOptions>().BindConfiguration("PipelineWorker").ValidateDataAnnotations().ValidateOnStart();
         services.AddSingleton<ServerPaths>();
-        services.AddScoped<IPipelineFiles, PipelineFiles>();
+        services.AddScoped<IPipelineFiles>(provider => new PipelineFiles(provider.GetRequiredService<ServerPaths>(),
+            provider.GetRequiredService<ResiliencePipelineProvider<string>>().GetPipeline("postgres-input")));
         services.AddDbContext<PipelineDbContext>(options => options.UseNpgsql(configuration.GetConnectionString("Pipelines")
             ?? throw new InvalidOperationException("Configure ConnectionStrings:Pipelines using user-secrets or environment variables.")));
         services.AddScoped<IPipelineRepository, PipelineRepository>();

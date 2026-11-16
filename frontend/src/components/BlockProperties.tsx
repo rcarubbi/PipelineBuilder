@@ -13,7 +13,7 @@ interface Props { block: Blockly.Block; inputSchema: Column[]; onChange: () => v
 
 export function BlockProperties({ block, inputSchema, onChange, onDiscover }: Props) {
   function field(name: string, value: string) { block.setFieldValue(value, name); onChange(); }
-  function data(changes: { schema?: Column[]; mappings?: Mapping[]; api?: Record<string, unknown>; hasHeaderVariable?: string; predicate?: Record<string, unknown> }) { block.data = JSON.stringify({ ...getBlockData(block), ...changes }); onChange(); }
+  function data(changes: { schema?: Column[]; mappings?: Mapping[]; api?: Record<string, unknown>; postgres?: Record<string, unknown>; hasHeaderVariable?: string; predicate?: Record<string, unknown> }) { block.data = JSON.stringify({ ...getBlockData(block), ...changes }); onChange(); }
   const configuration = getBlockData(block);
   const mappings = configuration.mappings ?? [];
   const headerOption = () => <VariableModeField label="Header row" variable={!!configuration.hasHeaderVariable}
@@ -84,6 +84,51 @@ export function BlockProperties({ block, inputSchema, onChange, onDiscover }: Pr
           <SwitchField label='Use Link rel="next" header' checked={Boolean(api.useLinkHeader)} onCheckedChange={checked => setApi('useLinkHeader', checked)} />
         </VariableModeField>
         <IconButton icon="search" label="Fetch sample and discover schema" onClick={onDiscover} />
+        <ColumnEditor columns={configuration.schema ?? []} onChange={schema => data({ schema })} />
+      </>;
+    })()}
+    {block.type === 'pipeline_postgresInput' && (() => {
+      const postgres = configuration.postgres ?? {};
+      const setPostgres = (name: string, value: unknown) => data({ postgres: { ...(getBlockData(block).postgres ?? {}), [name]: value } });
+      const text = (name: string, label: string, placeholder: string, defaultValue = '', inputType = 'text') => {
+        const variableName = `${name}Variable`;
+        const variable = Boolean(postgres[variableName]);
+        const variableValue = String(postgres[variableName] ?? '');
+        return <VariableModeField key={name} label={label} variable={variable} variableValue={variableValue} placeholder={placeholder}
+          onModeChange={mode => setPostgres(variableName, mode ? variableValue || placeholder : '')}
+          onVariableChange={value => setPostgres(variableName, value)}>
+          <label className="field-control"><span className="visually-hidden">{label}</span><Input type={inputType} value={String(postgres[name] ?? defaultValue)} placeholder={placeholder}
+            onChange={event => setPostgres(name, event.target.value)} /></label>
+        </VariableModeField>;
+      };
+      const variableSelect = (name: string, label: string, values: string[], defaultValue: string) => {
+        const variableName = `${name}Variable`;
+        const variable = Boolean(postgres[variableName]);
+        const variableValue = String(postgres[variableName] ?? '');
+        const placeholder = '${env.PG_' + name.replace(/[A-Z]/g, character => `_${character}`).toUpperCase() + '}';
+        return <VariableModeField key={name} label={label} variable={variable} variableValue={variableValue} placeholder={placeholder}
+          onModeChange={mode => setPostgres(variableName, mode ? variableValue || placeholder : '')}
+          onVariableChange={value => setPostgres(variableName, value)}>
+          <label className="field-control"><span className="visually-hidden">{label}</span><Select value={String(postgres[name] ?? defaultValue)} onChange={event => setPostgres(name, event.target.value)}>
+            {values.map(value => <option key={value} value={value}>{value}</option>)}
+          </Select></label>
+        </VariableModeField>;
+      };
+      return <>
+        {text('host', 'Host', '${env.PG_HOST}', 'localhost')}
+        {text('port', 'Port', '${env.PG_PORT}', '5432')}
+        {text('database', 'Database', '${env.PG_DATABASE}')}
+        {text('username', 'Username', '${env.PG_USERNAME}')}
+        {text('password', 'Password secret reference', '${secret.PG_PASSWORD}', '', 'password')}
+        {variableSelect('sslMode', 'SSL mode', ['Disable', 'Prefer', 'Require', 'VerifyCA', 'VerifyFull'], 'Prefer')}
+        <VariableModeField label="SQL query" variable={Boolean(postgres.queryVariable)} variableValue={String(postgres.queryVariable ?? '')}
+          placeholder="${var.SQL_QUERY}" onModeChange={mode => setPostgres('queryVariable', mode ? String(postgres.queryVariable || '${var.SQL_QUERY}') : '')}
+          onVariableChange={value => setPostgres('queryVariable', value)}>
+          <label className="field-control"><span className="visually-hidden">SQL query</span><Textarea rows={8} value={String(postgres.query ?? '')} placeholder="SELECT id, name FROM public.customers"
+            onChange={event => setPostgres('query', event.target.value)} /></label>
+        </VariableModeField>
+        <p className="muted">The server connects to the configured database. Queries run in a read-only transaction. Use <code>{'${secret.NAME}'}</code> references for passwords.</p>
+        <IconButton icon="search" label="Run query and discover PostgreSQL schema" onClick={onDiscover} />
         <ColumnEditor columns={configuration.schema ?? []} onChange={schema => data({ schema })} />
       </>;
     })()}

@@ -70,4 +70,28 @@ public sealed class PipelineValidationTests
 
         PipelineValidation.Analyze(pipeline).Issues.ShouldContain(issue => issue.BlockId == "api" && issue.Message.Contains("server-side"));
     }
+
+    [TestMethod]
+    public void Analyze_When_PostgresInputUsesSecretPassword_Then_AcceptsExternalSource()
+    {
+        var pipeline = new PipelineDefinition(1, [
+            new PostgresInputStep("postgres", "db.example", "5432", "customers", "reader", "${secret.PG_PASSWORD}", "Require",
+                "SELECT id FROM customers", [new("id", ColumnType.Int64)]),
+            new CsvOutputStep("out", "customers.csv")
+        ]);
+
+        PipelineValidation.Analyze(pipeline).Issues.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void Analyze_When_PostgresInputContainsLiteralPassword_Then_RejectsIt()
+    {
+        var pipeline = new PipelineDefinition(1, [
+            new PostgresInputStep("postgres", "db.example", "5432", "customers", "reader", "plain-text", "Require",
+                "SELECT id FROM customers", [new("id", ColumnType.Int64)]),
+            new CsvOutputStep("out", "customers.csv")
+        ]);
+
+        PipelineValidation.Analyze(pipeline).Issues.ShouldContain(issue => issue.BlockId == "postgres" && issue.Message.Contains("server-side"));
+    }
 }

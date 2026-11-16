@@ -37,6 +37,17 @@ public sealed class DefinitionValidator : AbstractValidator<DefinitionRecord>
                 case ExcelInputRecord excel:
                     if (excel.Path is null || excel.Sheet is null || !ValidColumns(excel.Schema)) context.AddFailure("Excel input path, sheet and a valid schema are required.");
                     break;
+                case PostgresInputRecord postgres:
+                    if (postgres.Host is null || postgres.Port is null || postgres.Database is null || postgres.Username is null ||
+                        postgres.Password is null || postgres.SslMode is null || postgres.Query is null || !ValidColumns(postgres.Schema))
+                        context.AddFailure("PostgreSQL connection properties, query and a valid schema are required.");
+                    else if (string.IsNullOrWhiteSpace(postgres.Host) || string.IsNullOrWhiteSpace(postgres.Database) ||
+                        string.IsNullOrWhiteSpace(postgres.Username) || string.IsNullOrWhiteSpace(postgres.Query) || postgres.Query.Length > 65536 ||
+                        !HasVariable(postgres.Port) && (!int.TryParse(postgres.Port, out var port) || port is < 1 or > 65535) ||
+                        !HasVariable(postgres.SslMode) && postgres.SslMode is not ("Disable" or "Prefer" or "Require" or "VerifyCA" or "VerifyFull") ||
+                        !string.IsNullOrEmpty(postgres.Password) && !IsSecretReference(postgres.Password))
+                        context.AddFailure("PostgreSQL connection values, SQL length, SSL mode, port and secret password are invalid.");
+                    break;
                 case ExcelOutputRecord excel:
                     if (excel.Path is null || excel.Sheet is null) context.AddFailure("Excel output path and sheet are required.");
                     break;
@@ -45,6 +56,11 @@ public sealed class DefinitionValidator : AbstractValidator<DefinitionRecord>
     }
 
     private static bool ValidColumns(ColumnRecord[]? columns) => columns is { Length: >= 1 and <= 200 } && columns.All(c => c is not null && c.Name is not null && Enum.IsDefined(c.Type));
+
+    private static bool HasVariable(string? value) => value?.Contains("${", StringComparison.Ordinal) == true;
+
+    private static bool IsSecretReference(string value) => value.StartsWith("${secret.", StringComparison.Ordinal) && value.EndsWith('}') &&
+        value.Length > 10 && value[9..^1].All(character => char.IsAsciiLetterOrDigit(character) || character == '_');
 
     private static bool ValidPredicate(PredicateRecord? predicate, int depth)
     {

@@ -21,11 +21,13 @@ public sealed class ListPipelinesQueryTests
     {
         var pipelines = Enumerable.Range(0, 26).Select(i => new PipelineSummaryRecord(Guid.NewGuid(), $"Pipeline {i}", 1, ["test"])).ToArray();
         _queries.Setup(q => q.GetPipelines(25, 26, _ct)).ReturnsAsync(pipelines);
+        _queries.Setup(q => q.CountPipelines(_ct)).ReturnsAsync(50);
 
         var result = await _sut.Handle(new(2), _ct);
 
         result.Value.Page.ShouldBe(2);
         result.Value.HasMore.ShouldBeTrue();
+        result.Value.TotalCount.ShouldBe(50);
         result.Value.Pipelines.ShouldBe(pipelines.Take(25).ToArray());
     }
 

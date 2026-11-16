@@ -7,8 +7,8 @@ import { api } from '../pipeline/api';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Card } from '../components/ui/card';
-import { Alert } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
+import { Toast, Toaster } from '../components/Toast';
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { SwitchField } from '../components/ui/switch-field';
 import type { Schedule, ScheduledPipeline } from '../pipeline/types';
@@ -107,32 +107,49 @@ export function SchedulesPage() {
         <IconButton icon="refresh" label="Refresh schedules" loading={loading} disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
         <p className="muted">Schedules run in UTC. Attach pipelines from the pipeline list. Runs missed while the server is offline are skipped.</p>
       </Card>
-      {message && <Alert className="notice">{message}</Alert>}
-      {error && <Alert role="alert" variant="destructive" className="notice">{error}</Alert>}
+      {(message || error) && <Toaster>
+        {message && <Toast key={`message:${message}`}>{message}</Toast>}
+        {error && <Toast key={`error:${error}`} variant="destructive">{error}</Toast>}
+      </Toaster>}
       <div className="schedule-layout">
         <Card className="panel" aria-label="Schedule editor">
           <h2>{editing ? `Edit ${draft.alias}` : 'New schedule'}</h2>
           <label>Alias<Input value={draft.alias} maxLength={64} placeholder="e.g. weekday-morning" onChange={e => setDraft({ ...draft, alias: e.target.value })} /></label>
           <SwitchField label="Edit cron expression directly" checked={draft.advanced} onCheckedChange={setAdvanced} />
-          {draft.advanced ? <label>Cron expression (UTC)<Input value={draft.cron} spellCheck={false} placeholder="minute hour day month weekday" onChange={e => setDraft({ ...draft, cron: e.target.value })} /></label> : <>
+          <div className={`schedule-mode-panel${draft.advanced ? ' is-active' : ''}`} aria-hidden={!draft.advanced} inert={!draft.advanced}>
+            <div className="schedule-mode-content"><label>Cron expression (UTC)<Input value={draft.cron} spellCheck={false} placeholder="minute hour day month weekday" onChange={e => setDraft({ ...draft, cron: e.target.value })} /></label></div>
+          </div>
+          <div className={`schedule-mode-panel${draft.advanced ? '' : ' is-active'}`} aria-hidden={draft.advanced} inert={draft.advanced}>
+            <div className="schedule-mode-content">
             <label>Repeat<Select value={settings.frequency} onChange={e => update({ frequency: e.target.value as Frequency })}>
               {frequencies.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </Select></label>
-            {settings.frequency === 'minutes' && <label>Interval<Select value={settings.interval} onChange={e => update({ interval: Number(e.target.value) })}>
-              {minuteIntervals.map(n => <option key={n} value={n}>{n === 1 ? 'Every minute' : `Every ${n} minutes`}</option>)}
-            </Select></label>}
-            {settings.frequency === 'hourly' && <label>At minute<Input type="number" min={0} max={59} value={settings.minute}
-              onChange={e => update({ minute: Math.min(59, Math.max(0, Number(e.target.value) || 0)) })} /></label>}
-            {['daily', 'weekly', 'monthly'].includes(settings.frequency) && <label>Time (UTC)<Input type="time" required value={formatTime(settings.hour, settings.minute)}
-              onChange={e => { const [hour, minute] = e.target.value.split(':').map(Number); if (!Number.isNaN(hour) && !Number.isNaN(minute)) update({ hour, minute }); }} /></label>}
-            {settings.frequency === 'weekly' && <fieldset><legend>Days</legend><div className="weekday-picker">
+            <div className={`schedule-mode-panel${settings.frequency === 'minutes' ? ' is-active' : ''}`} aria-hidden={settings.frequency !== 'minutes'} inert={settings.frequency !== 'minutes'}>
+              <div className="schedule-mode-content"><label>Interval<Select value={settings.interval} onChange={e => update({ interval: Number(e.target.value) })}>
+                {minuteIntervals.map(n => <option key={n} value={n}>{n === 1 ? 'Every minute' : `Every ${n} minutes`}</option>)}
+              </Select></label></div>
+            </div>
+            <div className={`schedule-mode-panel${settings.frequency === 'hourly' ? ' is-active' : ''}`} aria-hidden={settings.frequency !== 'hourly'} inert={settings.frequency !== 'hourly'}>
+              <div className="schedule-mode-content"><label>At minute<Input type="number" min={0} max={59} value={settings.minute}
+                onChange={e => update({ minute: Math.min(59, Math.max(0, Number(e.target.value) || 0)) })} /></label></div>
+            </div>
+            <div className={`schedule-mode-panel${['daily', 'weekly', 'monthly'].includes(settings.frequency) ? ' is-active' : ''}`} aria-hidden={!['daily', 'weekly', 'monthly'].includes(settings.frequency)} inert={!['daily', 'weekly', 'monthly'].includes(settings.frequency)}>
+              <div className="schedule-mode-content"><label>Time (UTC)<Input type="time" required value={formatTime(settings.hour, settings.minute)}
+                onChange={e => { const [hour, minute] = e.target.value.split(':').map(Number); if (!Number.isNaN(hour) && !Number.isNaN(minute)) update({ hour, minute }); }} /></label></div>
+            </div>
+            <div className={`schedule-mode-panel${settings.frequency === 'weekly' ? ' is-active' : ''}`} aria-hidden={settings.frequency !== 'weekly'} inert={settings.frequency !== 'weekly'}>
+              <div className="schedule-mode-content"><fieldset><legend>Days</legend><div className="weekday-picker">
               {weekdays.map((day, index) => <SwitchField key={day} label={day.slice(0, 3)} checked={settings.days.includes(index)}
                 onCheckedChange={checked => update({ days: checked ? [...settings.days, index] : settings.days.filter(d => d !== index) })} />)}
-            </div></fieldset>}
-            {settings.frequency === 'monthly' && <label>Day of month<Select value={settings.dayOfMonth} onChange={e => update({ dayOfMonth: Number(e.target.value) })}>
-              {Array.from({ length: maxDayOfMonth }, (_, i) => i + 1).map(day => <option key={day} value={day}>{day}</option>)}
-            </Select></label>}
-          </>}
+              </div></fieldset></div>
+            </div>
+            <div className={`schedule-mode-panel${settings.frequency === 'monthly' ? ' is-active' : ''}`} aria-hidden={settings.frequency !== 'monthly'} inert={settings.frequency !== 'monthly'}>
+              <div className="schedule-mode-content"><label>Day of month<Select value={settings.dayOfMonth} onChange={e => update({ dayOfMonth: Number(e.target.value) })}>
+                {Array.from({ length: maxDayOfMonth }, (_, i) => i + 1).map(day => <option key={day} value={day}>{day}</option>)}
+              </Select></label></div>
+            </div>
+            </div>
+          </div>
           <SwitchField label="Enabled" checked={draft.isEnabled} onCheckedChange={isEnabled => setDraft({ ...draft, isEnabled })} />
           <div className="schedule-preview" aria-live="polite">
             <p><strong>{describe(cronExpression)}</strong></p>
@@ -172,7 +189,7 @@ export function SchedulesPage() {
           </Table></div>}
         </section>
       </div>
-      {deleting && <ConfirmDialog title={`Delete schedule ${deleting.alias}?`} description="This schedule will be permanently removed." confirmLabel="Delete schedule" onCancel={() => setDeleting(null)} onConfirm={() => { const schedule = deleting; setDeleting(null); remove(schedule); }} />}
+      <ConfirmDialog open={!!deleting} title={`Delete schedule ${deleting?.alias}?`} description="This schedule will be permanently removed." confirmLabel="Delete schedule" onCancel={() => setDeleting(null)} onConfirm={() => { if (!deleting) return; const schedule = deleting; setDeleting(null); remove(schedule); }} />
     </main>
   </>;
 }

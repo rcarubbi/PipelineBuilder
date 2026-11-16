@@ -133,6 +133,6 @@ export function EnvironmentEditor({ json, onChange }: Props) {
       {formError && <p role="alert" className="field-error">{formError}</p>}
       <IconButton icon="add" label="Add environment" onClick={addEnvironment} />
     </>}
-    {deleting && <ConfirmDialog title={`Remove environment ${deleting.name}?`} description="Its variables will also be removed." confirmLabel="Remove environment" onCancel={() => setDeleting(null)} onConfirm={() => { update(rows.filter(row => row.id !== deleting.id)); setDeleting(null); }} />}
+    <ConfirmDialog open={!!deleting} title={`Remove environment ${deleting?.name}?`} description="Its variables will also be removed." confirmLabel="Remove environment" onCancel={() => setDeleting(null)} onConfirm={() => { if (!deleting) return; update(rows.filter(row => row.id !== deleting.id)); setDeleting(null); }} />
   </details>;
 }

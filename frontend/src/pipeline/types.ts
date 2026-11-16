@@ -20,6 +20,7 @@ export type Step =
   | { type: 'parquetInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[] }
   | { type: 'excelInput'; id: string; path: string; pathExpression?: TextExpression; schema: Column[]; sheet: string; hasHeader: boolean; hasHeaderVariable?: string }
   | { type: 'apiInput'; id: string; url: string; schema: Column[]; dataPath: string; method: string; format: string; authentication: string; username?: string; password?: string; token?: string; apiKeyName?: string; apiKey?: string; oauthTokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; nextPath?: string; useLinkHeader: boolean; useLinkHeaderVariable?: string; body?: string; headers?: Record<string, string> }
+  | { type: 'postgresInput'; id: string; host: string; port: string; database: string; username: string; password: string; sslMode: string; query: string; schema: Column[] }
   | { type: 'map'; id: string; mappings: Mapping[] }
   | { type: 'filter'; id: string; criteria: Predicate }
   | { type: 'parquet'; id: string; path: string; pathExpression?: TextExpression }
@@ -34,7 +35,7 @@ export interface PipelineDocument {
 }
 export interface SavedPipeline { id: string; revision: number; document: PipelineDocument }
 export interface PipelineSummary { id: string; name: string; revision: number; environments: string[] }
-export interface PipelineList { pipelines: PipelineSummary[]; page: number; hasMore: boolean }
+export interface PipelineList { pipelines: PipelineSummary[]; page: number; hasMore: boolean; totalCount: number }
 export interface Analysis {
   issues: { blockId: string; message: string }[];
   schemas: { blockId: string; input: Column[]; output: Column[] }[];
@@ -45,7 +46,7 @@ export interface Run {
   rowsRead: number; rowsWritten: number; error: string | null; blockId: string | null;
   createdAt: string; startedAt: string | null; finishedAt: string | null; trigger: string;
 }
-export interface RunHistory { runs: Run[]; page: number; hasMore: boolean }
+export interface RunHistory { runs: Run[]; page: number; hasMore: boolean; totalCount: number }
 export interface ScheduledPipeline { pipelineId: string; pipelineName: string; environment: string }
 export interface Schedule {
   id: string; alias: string; cronExpression: string; isEnabled: boolean; revision: number;
@@ -55,7 +56,7 @@ export function inferSchemas(definition: Definition): Analysis['schemas'] {
   let current: Column[] = [];
   return definition.steps.map(step => {
     const input = current;
-    if (step.type === 'csv' || step.type === 'parquetInput' || step.type === 'excelInput' || step.type === 'apiInput') current = step.schema;
+    if (step.type === 'csv' || step.type === 'parquetInput' || step.type === 'excelInput' || step.type === 'apiInput' || step.type === 'postgresInput') current = step.schema;
     if (step.type === 'map') current = step.mappings.map(m => m.target);
     return { blockId: step.id, input, output: step.type === 'parquet' || step.type === 'csvOutput' || step.type === 'excelOutput' ? [] : current };
   });

@@ -13,6 +13,8 @@ public sealed record ApiInputStep(string Id, string Url, Column[] Schema, string
     string? ClientId = null, string? ClientSecret = null, string? Scope = null,
     string? NextPath = null, bool UseLinkHeader = false, string? Body = null, Dictionary<string, string>? Headers = null,
     string? UseLinkHeaderVariable = null) : PipelineStep(Id);
+public sealed record PostgresInputStep(string Id, string Host, string Port, string Database, string Username, string Password,
+    string SslMode, string Query, Column[] Schema) : PipelineStep(Id);
 public sealed record MapStep(string Id, ColumnMapping[] Mappings) : PipelineStep(Id);
 public sealed record FilterStep(string Id, IRowPredicate Criteria) : PipelineStep(Id);
 public sealed record ParquetStep(string Id, string Path) : PipelineStep(Id);
@@ -31,7 +33,7 @@ public static class PipelineValidation
         List<StepSchema> schemas = [];
         if (definition.FormatVersion != 1) issues.Add(new("", "Unsupported definition format version."));
         if (definition.Steps.Length is < 2 or > 100) issues.Add(new("", "A pipeline needs 2 to 100 steps."));
-        if (definition.Steps.FirstOrDefault() is not (CsvStep or ParquetInputStep or ExcelInputStep or ApiInputStep) || definition.Steps.LastOrDefault() is not (ParquetStep or CsvOutputStep or ExcelOutputStep))
+        if (definition.Steps.FirstOrDefault() is not (CsvStep or ParquetInputStep or ExcelInputStep or ApiInputStep or PostgresInputStep) || definition.Steps.LastOrDefault() is not (ParquetStep or CsvOutputStep or ExcelOutputStep))
             issues.Add(new("", "Connect one input to one final output."));
         HashSet<string> ids = [];
         Column[] current = [];
@@ -91,6 +93,19 @@ public static class PipelineValidation
                         && !IsSecretReference(header.Value)) == true)
                         issues.Add(new(step.Id, "Sensitive custom headers must use ${secret.NAME}; header values are limited to 4096 characters."));
                     current = api.Schema;
+                    break;
+                case PostgresInputStep postgres:
+                    if (index != 0 || string.IsNullOrWhiteSpace(postgres.Host) || string.IsNullOrWhiteSpace(postgres.Database) ||
+                        string.IsNullOrWhiteSpace(postgres.Username) || string.IsNullOrWhiteSpace(postgres.Query))
+                        issues.Add(new(step.Id, "PostgreSQL input needs a host, database, username and SQL query."));
+                    if (!HasVariable(postgres.Port) && (!int.TryParse(postgres.Port, out var port) || port is < 1 or > 65535))
+                        issues.Add(new(step.Id, "PostgreSQL port must be between 1 and 65535."));
+                    if (!HasVariable(postgres.SslMode) && postgres.SslMode is not ("Disable" or "Prefer" or "Require" or "VerifyCA" or "VerifyFull"))
+                        issues.Add(new(step.Id, "Choose a supported PostgreSQL SSL mode."));
+                    if (postgres.Query.Length > 65536) issues.Add(new(step.Id, "PostgreSQL query is limited to 64 KiB."));
+                    if (!string.IsNullOrEmpty(postgres.Password) && !IsSecretReference(postgres.Password))
+                        issues.Add(new(step.Id, "PostgreSQL passwords must use a server-side ${secret.NAME} reference."));
+                    current = postgres.Schema;
                     break;
                 case CsvOutputStep csvOutput:
                     if (index != definition.Steps.Length - 1) issues.Add(new(step.Id, "CSV output must be last and unique."));

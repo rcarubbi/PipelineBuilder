@@ -35,6 +35,7 @@ public sealed record TextUtcRecord(string Id, string Format, TextExpressionRecor
 [JsonDerivedType(typeof(ExcelInputRecord), "excelInput")]
 [JsonDerivedType(typeof(ExcelOutputRecord), "excelOutput")]
 [JsonDerivedType(typeof(ApiInputRecord), "apiInput")]
+[JsonDerivedType(typeof(PostgresInputRecord), "postgresInput")]
 public abstract record StepRecord(string Id);
 public sealed record CsvRecord(string Id, string Path, ColumnRecord[] Schema, string Delimiter = ",", bool HasHeader = true, TextExpressionRecord? PathExpression = null, string? HasHeaderVariable = null) : StepRecord(Id);
 public sealed record MapRecord(string Id, MappingRecord[] Mappings) : StepRecord(Id);
@@ -50,6 +51,8 @@ public sealed record ApiInputRecord(string Id, string Url, ColumnRecord[] Schema
     string? ClientId = null, string? ClientSecret = null, string? Scope = null,
     string? NextPath = null, bool UseLinkHeader = false, string? Body = null, Dictionary<string, string>? Headers = null,
     string? UseLinkHeaderVariable = null) : StepRecord(Id);
+public sealed record PostgresInputRecord(string Id, string Host, string Port, string Database, string Username, string Password,
+    string SslMode, string Query, ColumnRecord[] Schema) : StepRecord(Id);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(ComparisonRecord), "compare")]
@@ -95,6 +98,8 @@ public static class DefinitionMapping
         ApiInputRecord api => new ApiInputStep(api.Id, api.Url, api.Schema.Select(MapTo).ToArray(), api.DataPath, api.Method,
             api.Format, api.Authentication, api.Username, api.Password, api.Token, api.ApiKeyName, api.ApiKey,
             api.OAuthTokenUrl, api.ClientId, api.ClientSecret, api.Scope, api.NextPath, api.UseLinkHeader, api.Body, api.Headers, api.UseLinkHeaderVariable),
+        PostgresInputRecord postgres => new PostgresInputStep(postgres.Id, postgres.Host, postgres.Port, postgres.Database, postgres.Username,
+            postgres.Password, postgres.SslMode, postgres.Query, postgres.Schema.Select(MapTo).ToArray()),
         _ => throw new ArgumentException("Unsupported step.")
     };
     public static IRowPredicate MapTo(this PredicateRecord predicate) => predicate switch

@@ -22,8 +22,10 @@ public interface IDesignerQueries
 {
     Task<SavedPipelineRecord?> GetPipeline(Guid id, CancellationToken ct);
     Task<PipelineSummaryRecord[]> GetPipelines(int skip, int take, CancellationToken ct);
+    Task<int> CountPipelines(CancellationToken ct);
     Task<RunRecord?> GetRun(Guid id, CancellationToken ct);
     Task<RunRecord[]> GetRuns(int skip, int take, Guid? pipelineId, CancellationToken ct);
+    Task<int> CountRuns(Guid? pipelineId, CancellationToken ct);
     Task<bool> HasActiveRun(Guid pipelineId, string environment, CancellationToken ct);
     /// <summary>Case-insensitive match against the names of pipelines that are not deleted.</summary>
     Task<bool> PipelineNameExists(string name, CancellationToken ct);
@@ -35,6 +37,7 @@ public interface IPipelineFiles
     Task<ColumnRecord[]> DiscoverParquet(string path, CancellationToken ct);
     Task<ColumnRecord[]> DiscoverExcel(string path, string sheet, bool hasHeader, CancellationToken ct);
     Task<ApiSchemaDiscoveryRecord> DiscoverApi(ApiInputStep api, CancellationToken ct);
+    Task<ColumnRecord[]> DiscoverPostgres(PostgresInputStep postgres, CancellationToken ct);
     Task<ExecutionResultRecord> Execute(DefinitionRecord definition, Func<CancellationToken, Task<bool>> isCancelled, CancellationToken ct);
 }
 

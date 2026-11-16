@@ -89,6 +89,25 @@ it('blocks saving when no weekday is selected or the cron expression is rejected
   expect(api.saveSchedule).not.toHaveBeenCalled();
 });
 
+it('transitions between the simple and direct cron editors', async () => {
+  const user = userEvent.setup();
+  render(<SchedulesPage />);
+  await screen.findByRole('table', { name: 'Schedules' });
+  const repeat = screen.getByLabelText('Repeat');
+  const cron = screen.getByLabelText('Cron expression (UTC)');
+  const simplePanel = repeat.closest('.schedule-mode-panel')!;
+  const cronPanel = cron.closest('.schedule-mode-panel')!;
+
+  expect(simplePanel).toHaveClass('is-active');
+  expect(cronPanel).not.toHaveClass('is-active');
+  await user.click(screen.getByLabelText('Edit cron expression directly'));
+  expect(simplePanel).not.toHaveClass('is-active');
+  expect(cronPanel).toHaveClass('is-active');
+  await user.click(screen.getByLabelText('Edit cron expression directly'));
+  expect(simplePanel).toHaveClass('is-active');
+  expect(cronPanel).not.toHaveClass('is-active');
+});
+
 it('edits an existing schedule with its revision and keeps custom cron expressions in advanced mode', async () => {
   vi.mocked(api.schedules).mockResolvedValue({ schedules: [schedule, { ...schedule, id: 'schedule-2', alias: 'custom', cronExpression: '0 8-17 * * 1-5', pipelines: [] }] });
   const user = userEvent.setup();

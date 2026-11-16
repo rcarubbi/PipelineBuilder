@@ -8,7 +8,7 @@ vi.mock('../pipeline/api', () => ({ api: { pipelines: vi.fn(), run: vi.fn(), del
 const pipeline = { id: 'pipeline-1', name: 'Customers', revision: 3, environments: ['development', 'test'] };
 const schedule = { id: 'schedule-1', alias: 'weekday-morning', cronExpression: '30 8 * * 1,2,3,4,5', isEnabled: true, revision: 1, pipelines: [], nextRuns: [] };
 beforeEach(() => {
-  vi.mocked(api.pipelines).mockReset().mockResolvedValue({ page: 1, hasMore: false, pipelines: [pipeline] });
+  vi.mocked(api.pipelines).mockReset().mockResolvedValue({ page: 1, hasMore: false, totalCount: 1, pipelines: [pipeline] });
   vi.mocked(api.schedules).mockReset().mockResolvedValue({ schedules: [schedule] });
   vi.mocked(api.attachSchedule).mockReset();
   vi.mocked(api.detachSchedule).mockReset();
@@ -38,6 +38,8 @@ it('lists pipelines with accessible icon actions and navigation hints', async ()
   expect(screen.getByRole('link', { name: 'Create new pipeline' })).toHaveAttribute('href', '?page=designer');
   expect(screen.getByRole('link', { name: 'Open Customers in designer' })).toHaveAttribute('href', '?page=designer&pipeline=pipeline-1');
   expect(screen.getByRole('link', { name: 'View logs for Customers' })).toHaveAttribute('href', '?page=logs&pipeline=pipeline-1');
+  expect(screen.getByRole('table', { name: 'Saved pipelines' })).toBeInTheDocument();
+  expect(screen.queryByText(/Saved pipelines — page/)).not.toBeInTheDocument();
   const run = screen.getByRole('button', { name: 'Run Customers' });
   expect(run).toHaveAttribute('title', 'Run Customers');
   expect(run.textContent).toBe('');
@@ -69,7 +71,7 @@ it('requires confirmation before deleting and refreshes the list afterward', asy
   await user.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(api.deletePipeline).not.toHaveBeenCalled();
 
-  vi.mocked(api.pipelines).mockResolvedValue({ page: 1, hasMore: false, pipelines: [] });
+  vi.mocked(api.pipelines).mockResolvedValue({ page: 1, hasMore: false, totalCount: 0, pipelines: [] });
   await user.click(screen.getByRole('button', { name: 'Delete Customers' }));
   await user.click(screen.getByRole('button', { name: 'Delete pipeline' }));
   expect(api.deletePipeline).toHaveBeenCalledWith('pipeline-1', 3);
@@ -92,12 +94,12 @@ it('keeps a pipeline visible when deletion is rejected', async () => {
 });
 
 it('handles an empty list without hiding the create action', async () => {
-  vi.mocked(api.pipelines).mockResolvedValue({ page: 1, hasMore: false, pipelines: [] });
+  vi.mocked(api.pipelines).mockResolvedValue({ page: 1, hasMore: false, totalCount: 0, pipelines: [] });
   render(<PipelinesPage />);
 
   expect(await screen.findByText(/No pipelines yet/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Create new pipeline' })).toBeVisible();
-  expect(screen.getByRole('button', { name: 'More pipelines' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
 });
 
 it('imports a JSON definition from the pipeline list', async () => {
@@ -133,16 +135,17 @@ it('exports the latest saved pipeline from its row', async () => {
 });
 
 it('loads subsequent pages', async () => {
-  vi.mocked(api.pipelines).mockResolvedValueOnce({ page: 1, hasMore: true, pipelines: [pipeline] })
-    .mockResolvedValueOnce({ page: 2, hasMore: false, pipelines: [{ ...pipeline, id: 'pipeline-2', name: 'Orders' }] });
+  vi.mocked(api.pipelines).mockResolvedValueOnce({ page: 1, hasMore: true, totalCount: 26, pipelines: [pipeline] })
+    .mockResolvedValueOnce({ page: 2, hasMore: false, totalCount: 26, pipelines: [{ ...pipeline, id: 'pipeline-2', name: 'Orders' }] });
   render(<PipelinesPage />);
   await screen.findByText('Customers');
 
-  await userEvent.setup().click(screen.getByRole('button', { name: 'More pipelines' }));
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Next page' }));
 
   expect(await screen.findByText('Orders')).toBeInTheDocument();
   expect(api.pipelines).toHaveBeenLastCalledWith(2);
-  expect(screen.getByRole('button', { name: 'More pipelines' })).toBeDisabled();
+  expect(screen.getByText('Page 2 of 2 · 26 total')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
 });
 
 it('shows load errors and supports retry', async () => {
@@ -168,7 +171,10 @@ it('adds the same pipeline to one schedule in several environments and shows the
   await user.click(screen.getByRole('button', { name: 'Schedule Customers' }));
   const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
   expect(form.getByRole('option', { name: 'weekday-morning — Every weekday at 08:30 UTC' })).toBeInTheDocument();
-  expect(form.getByRole('switch', { name: 'development' })).toBeChecked();
+  expect(form.getByRole('switch', { name: 'development' })).not.toBeChecked();
+  expect(form.getByRole('switch', { name: 'development' })).toBeDisabled();
+  await user.selectOptions(form.getByRole('combobox', { name: 'Schedule' }), 'weekday-morning');
+  await user.click(form.getByRole('switch', { name: 'development' }));
   expect(form.getByRole('switch', { name: 'test' })).not.toBeChecked();
   await user.click(form.getByRole('switch', { name: 'test' }));
   vi.mocked(api.schedules).mockResolvedValue({ schedules: [{ ...schedule, nextRuns: [nextRun], pipelines: links }] });
@@ -190,6 +196,7 @@ it('collapses and reopens the schedule editor without losing the current draft',
   const toggle = screen.getByRole('button', { name: 'Schedule Customers' });
   await user.click(toggle);
   const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
+  await user.selectOptions(form.getByRole('combobox', { name: 'Schedule' }), 'weekday-morning');
   await user.click(form.getByRole('switch', { name: 'test' }));
 
   await user.click(toggle);
@@ -201,19 +208,29 @@ it('collapses and reopens the schedule editor without losing the current draft',
   expect(within(screen.getByRole('group', { name: 'Add Customers to a schedule' })).getByRole('switch', { name: 'test' })).toBeChecked();
 });
 
-it('shows existing environments for a schedule and removes only the unchecked one', async () => {
-  const links = ['development', 'test'].map(environment => ({ pipelineId: 'pipeline-1', pipelineName: 'Customers', environment }));
-  vi.mocked(api.schedules).mockResolvedValue({ schedules: [{ ...schedule, pipelines: links }] });
-  vi.mocked(api.detachSchedule).mockResolvedValue({ ...schedule, pipelines: [links[1]] });
+it('shows saved environments only after selecting their schedule', async () => {
+  const links = [{ pipelineId: 'pipeline-1', pipelineName: 'Customers', environment: 'development' }];
+  vi.mocked(api.schedules).mockResolvedValue({ schedules: [
+    { ...schedule, id: 'every-minute', alias: 'every-minute', cronExpression: '* * * * *', pipelines: [] },
+    { ...schedule, pipelines: links },
+  ] });
+  vi.mocked(api.detachSchedule).mockResolvedValue({ ...schedule, pipelines: [] });
   const user = userEvent.setup();
   render(<PipelinesPage />);
-  await screen.findByText('(development, test)');
+  await screen.findByText('(development)');
 
   await user.click(screen.getByRole('button', { name: 'Schedule Customers' }));
   const form = within(screen.getByRole('group', { name: 'Add Customers to a schedule' }));
   const save = form.getByRole('button', { name: 'Save Customers schedule environments' });
+  expect(form.getByRole('combobox', { name: 'Schedule' })).toHaveValue('');
+  expect(form.getByRole('switch', { name: 'development' })).not.toBeChecked();
+  expect(form.getByRole('switch', { name: 'test' })).not.toBeChecked();
+  expect(form.getByRole('switch', { name: 'development' })).toBeDisabled();
+  expect(form.getByRole('switch', { name: 'test' })).toBeDisabled();
+  await user.selectOptions(form.getByRole('combobox', { name: 'Schedule' }), 'weekday-morning');
   expect(form.getByRole('switch', { name: 'development' })).toBeChecked();
-  expect(form.getByRole('switch', { name: 'test' })).toBeChecked();
+  expect(form.getByRole('switch', { name: 'test' })).not.toBeChecked();
+  expect(form.getByRole('switch', { name: 'development' })).toBeEnabled();
   expect(save).toBeDisabled();
   await user.click(form.getByRole('switch', { name: 'development' }));
   await user.click(save);

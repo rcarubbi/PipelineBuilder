@@ -134,6 +134,31 @@ public sealed class StartRunCommandTests
     }
 
     [TestMethod]
+    public async Task Handle_When_PostgresPropertiesUseVariables_Then_ResolvesConnectionAndQuery()
+    {
+        var definition = new DefinitionRecord(1, [
+            new PostgresInputRecord("postgres", "${env.PG_HOST}", "${env.PG_PORT}", "${var.DB_NAME}", "${env.PG_USER}",
+                "${secret.PG_PASSWORD}", "${env.PG_SSL_MODE}", "SELECT id FROM ${var.TABLE}", [new("id", ColumnTypeRecord.Int64)]),
+            new CsvOutputRecord("out", "result.csv")
+        ], [new VariableRecord("DB_NAME", new TextLiteralRecord("database", "customers")),
+            new VariableRecord("TABLE", new TextLiteralRecord("table", "public.customers"))]);
+        _pipeline = _pipeline with { Document = _pipeline.Document with {
+            Definition = definition,
+            Environments = new() { ["test"] = new() { ["PG_HOST"] = "db.example", ["PG_PORT"] = "5432", ["PG_USER"] = "reader", ["PG_SSL_MODE"] = "Require" } }
+        } };
+        _queries.Setup(q => q.GetPipeline(_pipeline.Id, _ct)).ReturnsAsync(_pipeline);
+
+        var result = await _sut.Handle(new(_pipeline.Id, 2, "test"), _ct);
+
+        result.IsError.ShouldBeFalse();
+        _repository.Verify(r => r.Enqueue(_pipeline.Id, 2, It.Is<RunSnapshotRecord>(snapshot =>
+            ((PostgresInputRecord)snapshot.Definition.Steps[0]).Host == "db.example" && ((PostgresInputRecord)snapshot.Definition.Steps[0]).Port == "5432" &&
+            ((PostgresInputRecord)snapshot.Definition.Steps[0]).Database == "customers" && ((PostgresInputRecord)snapshot.Definition.Steps[0]).Username == "reader" &&
+            ((PostgresInputRecord)snapshot.Definition.Steps[0]).Password == "${secret.PG_PASSWORD}" && ((PostgresInputRecord)snapshot.Definition.Steps[0]).SslMode == "Require" &&
+            ((PostgresInputRecord)snapshot.Definition.Steps[0]).Query == "SELECT id FROM public.customers"), _ct), Times.Once);
+    }
+
+    [TestMethod]
     public async Task Handle_When_BooleanPropertyVariableIsNotBoolean_Then_RejectsRun()
     {
         var definition = new DefinitionRecord(1, [

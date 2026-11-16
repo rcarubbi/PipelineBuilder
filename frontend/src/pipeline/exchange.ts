@@ -22,6 +22,10 @@ function normalizeDefinition(value: unknown): Definition {
       return { ...raw, ...path(raw), delimiter: raw.delimiter ?? ',', hasHeader: raw.hasHeader ?? true, schema: raw.schema.map(normalizedColumn) } as Step;
     if ((raw.type === 'parquetInput' || raw.type === 'excelInput') && Array.isArray(raw.schema))
       return { ...raw, ...path(raw), ...(raw.type === 'excelInput' ? { hasHeader: raw.hasHeader ?? true } : {}), schema: raw.schema.map(normalizedColumn) } as Step;
+    if (raw.type === 'apiInput' && Array.isArray(raw.schema))
+      return { ...raw, schema: raw.schema.map(normalizedColumn) } as Step;
+    if (raw.type === 'postgresInput' && Array.isArray(raw.schema))
+      return { ...raw, schema: raw.schema.map(normalizedColumn) } as Step;
     if (raw.type === 'map' && Array.isArray(raw.mappings))
       return { ...raw, mappings: raw.mappings.map(mapping => {
         if (!isRecord(mapping)) throw new Error('Definition contains an invalid mapping.');
@@ -38,7 +42,7 @@ function normalizeDefinition(value: unknown): Definition {
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`;
+  if (isRecord(value)) return `{${Object.keys(value).filter(key => value[key] !== null).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
 

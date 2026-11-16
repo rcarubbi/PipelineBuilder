@@ -153,6 +153,12 @@ internal static partial class RunSnapshotFactory
                         Headers = api.Headers?.ToDictionary(p => Resolve(p.Key), p => Resolve(p.Value), StringComparer.OrdinalIgnoreCase),
                         Schema = api.Schema.Select(ResolveColumn).ToArray()
                     },
+                    PostgresInputRecord postgres => postgres with
+                    {
+                        Host = Resolve(postgres.Host), Port = Resolve(postgres.Port), Database = Resolve(postgres.Database),
+                        Username = Resolve(postgres.Username), Password = Resolve(postgres.Password), SslMode = Resolve(postgres.SslMode),
+                        Query = Resolve(postgres.Query), Schema = postgres.Schema.Select(ResolveColumn).ToArray()
+                    },
                     FilterRecord filter => filter with { Criteria = ResolvePredicate(filter.Criteria) },
                     _ => step
                 }).ToArray()

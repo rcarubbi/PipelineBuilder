@@ -26,11 +26,11 @@ export const api = {
   load: (id: string) => request<SavedPipeline>(`pipelines/${encodeURIComponent(id)}`),
   importPipeline: (document: PipelineDocument) => request<SavedPipeline>('pipelines/import', 'POST', document),
   validate: (definition: Definition) => request<Analysis>('pipelines/validate', 'POST', definition),
-  discover: (path: string, delimiter: string, hasHeader: boolean, format = 'csv', sheet?: string, api?: Record<string, unknown>) =>
-    request<{ schema: Column[]; sampleLimit: number; dataPaths?: string[] }>('schemas/discover', 'POST', { path, delimiter, hasHeader, format, sheet, api }),
+  discover: (path: string, delimiter: string, hasHeader: boolean, format = 'csv', sheet?: string, api?: Record<string, unknown>, postgres?: Record<string, unknown>) =>
+    request<{ schema: Column[]; sampleLimit: number; dataPaths?: string[] }>('schemas/discover', 'POST', { path, delimiter, hasHeader, format, sheet, api, postgres }),
   run: (pipelineId: string, revision: number, environment: string) => request<Run>('runs', 'POST', { pipelineId, revision, environment }),
   getRun: (id: string) => request<Run>(`runs/${id}`),
-  history: (page: number, pipelineId?: string) => request<RunHistory>(`runs?page=${page}${pipelineId ? `&pipelineId=${encodeURIComponent(pipelineId)}` : ''}`),
+  history: (page: number, pipelineId?: string, pageSize = 25) => request<RunHistory>(`runs?page=${page}&pageSize=${pageSize}${pipelineId ? `&pipelineId=${encodeURIComponent(pipelineId)}` : ''}`),
   cancel: (id: string) => request<{ cancellationRequested: boolean }>(`runs/${id}/cancel`, 'POST'),
   schedules: () => request<{ schedules: Schedule[] }>('schedules'),
   saveSchedule: (id: string, expectedRevision: number, schedule: { alias: string; cronExpression: string; isEnabled: boolean }) =>

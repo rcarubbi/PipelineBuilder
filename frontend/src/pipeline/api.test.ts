@@ -26,11 +26,24 @@ it('imports a new pipeline by posting its document directly', async () => {
 });
 
 it('requests a bounded execution-history page', async () => {
-  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ runs: [], page: 2, hasMore: false })));
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ runs: [], page: 2, hasMore: false, totalCount: 0 })));
   vi.stubGlobal('fetch', fetchMock);
 
-  await expect(api.history(2)).resolves.toEqual({ runs: [], page: 2, hasMore: false });
-  expect(fetchMock).toHaveBeenCalledWith('/api/v1/runs?page=2', expect.objectContaining({ method: 'GET' }));
+  await expect(api.history(2)).resolves.toEqual({ runs: [], page: 2, hasMore: false, totalCount: 0 });
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/runs?page=2&pageSize=25', expect.objectContaining({ method: 'GET' }));
+});
+
+it('sends an external PostgreSQL query for schema discovery', async () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ schema: [], sampleLimit: 0 })));
+  vi.stubGlobal('fetch', fetchMock);
+  const postgres = { type: 'postgresInput', host: 'db.example', port: '5432', database: 'crm', username: 'reader',
+    password: '${secret.PG_PASSWORD}', sslMode: 'Require', query: 'SELECT id FROM customers', schema: [] };
+
+  await api.discover('', ',', true, 'postgres', undefined, undefined, postgres);
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/schemas/discover', expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ path: '', delimiter: ',', hasHeader: true, format: 'postgres', postgres }),
+  }));
 });
 
 it('addresses schedule associations by alias, pipeline and URL-encoded environment', async () => {
@@ -51,6 +64,6 @@ it('filters history by pipeline and deletes using the displayed revision', async
   await api.history(1, 'pipeline-1');
   await api.deletePipeline('pipeline-1', 3);
 
-  expect(fetchMock).toHaveBeenCalledWith('/api/v1/runs?page=1&pipelineId=pipeline-1', expect.objectContaining({ method: 'GET' }));
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/runs?page=1&pageSize=25&pipelineId=pipeline-1', expect.objectContaining({ method: 'GET' }));
   expect(fetchMock).toHaveBeenCalledWith('/api/v1/pipelines/pipeline-1?revision=3', expect.objectContaining({ method: 'DELETE' }));
 });

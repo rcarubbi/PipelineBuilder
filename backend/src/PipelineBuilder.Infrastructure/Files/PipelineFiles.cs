@@ -5,13 +5,14 @@ using CsvHelper.Configuration;
 using ExcelReader.Core.Reader;
 using Parquet;
 using Parquet.Schema;
+using Polly;
 using PipelineBuilder.Application.Contracts;
 using PipelineBuilder.Application.Interfaces;
 using PipelineBuilder.Domain.Pipelines;
 
 namespace PipelineBuilder.Infrastructure.Files;
 
-public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
+public sealed class PipelineFiles(ServerPaths paths, ResiliencePipeline postgresResilience) : IPipelineFiles
 {
     private const int BatchSize = 1024;
 
@@ -100,20 +101,26 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
 
     public Task<ApiSchemaDiscoveryRecord> DiscoverApi(ApiInputStep api, CancellationToken ct) => ApiInputReader.Discover(api, ct);
 
+    public Task<ColumnRecord[]> DiscoverPostgres(PostgresInputStep postgres, CancellationToken ct) => PostgresInputReader.Discover(postgres, postgresResilience, ct);
+
     public async Task<ExecutionResultRecord> Execute(DefinitionRecord definition, Func<CancellationToken, Task<bool>> isCancelled, CancellationToken ct)
     {
         var pipeline = definition.MapTo();
         var analysis = PipelineValidation.Analyze(pipeline);
         if (analysis.Issues.Length > 0) throw new PipelineDataException("Run snapshot has an invalid definition.");
         var input = pipeline.Steps[0];
-        var inputPathExpression = input switch { CsvStep csv => csv.Path, ParquetInputStep parquet => parquet.Path, ExcelInputStep excel => excel.Path, ApiInputStep api => api.Url, _ => throw new PipelineDataException("Unsupported input.") };
+        var inputPathExpression = input switch
+        {
+            CsvStep csv => csv.Path, ParquetInputStep parquet => parquet.Path, ExcelInputStep excel => excel.Path,
+            ApiInputStep api => api.Url, PostgresInputStep => "", _ => throw new PipelineDataException("Unsupported input.")
+        };
         var output = pipeline.Steps[^1];
         var outputPathExpression = output switch { ParquetStep parquet => parquet.Path, CsvOutputStep csv => csv.Path, ExcelOutputStep excel => excel.Path, _ => throw new PipelineDataException("Unsupported output.") };
         string? temporary = null;
         var activeBlock = input.Id;
         try
         {
-            var inputPath = input is ApiInputStep ? inputPathExpression : paths.Input(inputPathExpression);
+            var inputPath = input is ApiInputStep or PostgresInputStep ? inputPathExpression : paths.Input(inputPathExpression);
             string outputPath;
             try { outputPath = paths.Output(outputPathExpression); }
             catch (PipelineDataException ex) { throw new PipelineDataException(ex.Message, output.Id, ex); }
@@ -136,7 +143,7 @@ public sealed class PipelineFiles(ServerPaths paths) : IPipelineFiles
                     await csvOutput!.NextRecordAsync();
                 }
                 List<Dictionary<string, object?>> batch = [];
-                await foreach (var inputRow in PipelineInputReader.Read(input, inputPath, ct))
+                await foreach (var inputRow in PipelineInputReader.Read(input, inputPath, postgresResilience, ct))
                 {
                     ct.ThrowIfCancellationRequested();
                     activeBlock = input.Id;

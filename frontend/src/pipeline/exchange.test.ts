@@ -1,5 +1,5 @@
 import * as Blockly from 'blockly/core';
-import { compileEnvironments, compileWorkspace, seedWorkspace } from '../blockly/workspace';
+import { compileEnvironments, compileWorkspace, definitionToWorkspace, seedWorkspace } from '../blockly/workspace';
 import type { SavedPipeline } from './types';
 import { downloadPipeline, parseImport } from './exchange';
 
@@ -85,6 +85,41 @@ it('exports environment definitions created with Blockly environment blocks', as
   expect(parseImport(text, 'pipeline.json').environments).toEqual({ test: { INPUT_FILE: 'test.csv' } });
 });
 
+it('imports an exported pipeline with an API input', () => {
+  const workspace = new Blockly.Workspace();
+  const input = workspace.newBlock('pipeline_apiInput');
+  input.data = JSON.stringify({
+    schema: [{ name: 'id', type: 'string', nullable: false, precision: 18, scale: 2 }],
+    api: { url: 'https://example.com/items', dataPath: 'items', method: 'GET', format: 'json', authentication: 'basic', username: 'user', password: 'pass', token: 'bearer-token' },
+  });
+  const output = workspace.newBlock('pipeline_parquet');
+  const path = workspace.newBlock('value_literal');
+  path.setFieldValue('items.parquet', 'VALUE');
+  output.getInput('PATH')!.connection!.connect(path.outputConnection!);
+  input.nextConnection!.connect(output.previousConnection!);
+  const document = {
+    name: 'API pipeline', definition: compileWorkspace(workspace),
+    workspace: Blockly.serialization.workspaces.save(workspace), environments: compileEnvironments(workspace),
+  };
+  workspace.dispose();
+
+  expect(parseImport(JSON.stringify({ format: 'pipeline-builder/pipeline', formatVersion: 1, pipeline: document }), 'api.json')).toEqual(document);
+});
+
+it('round-trips an exported PostgreSQL pipeline with secret and variable references', () => {
+  const definition = { formatVersion: 1 as const, variables: [], steps: [
+    { type: 'postgresInput' as const, id: 'postgres', host: '${env.PG_HOST}', port: '5432', database: 'customers', username: 'reader',
+      password: '${secret.PG_PASSWORD}', sslMode: 'Require', query: 'SELECT id FROM customers', schema: [
+        { name: 'id', type: 'int64' as const, nullable: false, precision: 18, scale: 2 },
+      ] },
+    { type: 'parquet' as const, id: 'output', path: 'expression', pathExpression: { kind: 'literal' as const, id: 'output-path', value: 'customers.parquet' } },
+  ] };
+  const document = { name: 'PostgreSQL import', definition, workspace: definitionToWorkspace(definition), environments: { dev: { PG_HOST: 'db.example' } } };
+  const envelope = { format: 'pipeline-builder/pipeline', formatVersion: 1, pipeline: document };
+
+  expect(parseImport(JSON.stringify(envelope), 'postgres.json')).toEqual(document);
+});
+
 it('rebuilds Blockly and default variables from a definition-only file', () => {
   const definition = structuredClone(saved.document.definition);
   const csv = definition.steps[0];
@@ -114,6 +149,21 @@ it('rejects an exported workspace that disagrees with its executable definition'
   workspace.dispose();
 
   expect(() => parseImport(JSON.stringify(mismatched), 'Customers.json')).toThrow('does not match');
+});
+
+it('imports backend exports with null optional fields omitted from Blockly data', () => {
+  const document = structuredClone(saved.document);
+  const definition = document.definition as unknown as Record<string, any>;
+  const csv = definition.steps[0];
+  csv.hasHeaderVariable = null;
+  csv.schema[0].typeVariable = null;
+  csv.schema[0].nullableVariable = null;
+  const filter = definition.steps[1];
+  filter.criteria.columnExpression = null;
+  filter.criteria.valueExpression = null;
+  filter.criteria.operatorVariable = null;
+
+  expect(parseImport(JSON.stringify({ format: 'pipeline-builder/pipeline', formatVersion: 1, pipeline: { ...document, definition } }), 'Customers.json').name).toBe('Customers');
 });
 
 it('rejects unsupported formats and files larger than one mebibyte', () => {

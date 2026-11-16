@@ -37,3 +37,28 @@ it('selects a discovered nested API data path and refreshes its schema sample', 
     workspace.dispose();
   }
 });
+
+it('configures PostgreSQL connection fields and SQL through variable modes', async () => {
+  const workspace = new Blockly.Workspace();
+  try {
+    const block = workspace.newBlock('pipeline_postgresInput');
+    block.data = JSON.stringify({ schema: [], postgres: { host: 'localhost', port: '5432', sslMode: 'Prefer' } });
+    const discover = vi.fn();
+    const onChange = vi.fn();
+    const { rerender } = render(<BlockProperties block={block} inputSchema={[]} onChange={onChange} onDiscover={discover} />);
+    const user = userEvent.setup();
+
+    await user.click(within(screen.getByRole('group', { name: 'Host mode' })).getByRole('button', { name: 'Variable' }));
+    rerender(<BlockProperties block={block} inputSchema={[]} onChange={onChange} onDiscover={discover} />);
+    fireEvent.change(screen.getByLabelText('Host variable'), { target: { value: '${env.PG_HOST}' } });
+    fireEvent.change(screen.getByLabelText('Database'), { target: { value: 'customers' } });
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'reader' } });
+    fireEvent.change(screen.getByLabelText('SQL query'), { target: { value: 'SELECT id FROM customers' } });
+    await user.click(screen.getByRole('button', { name: 'Run query and discover PostgreSQL schema' }));
+
+    expect(JSON.parse(block.data!)).toMatchObject({ postgres: {
+      hostVariable: '${env.PG_HOST}', database: 'customers', username: 'reader', query: 'SELECT id FROM customers',
+    } });
+    expect(discover).toHaveBeenCalledOnce();
+  } finally { workspace.dispose(); }
+});

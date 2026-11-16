@@ -4,16 +4,18 @@ import { PageHeader } from '../components/PageHeader';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Loading } from '../components/Loading';
 import { api } from '../pipeline/api';
+import { Pagination } from '../components/Pagination';
 import { describe } from '../schedule/cron';
 import { Select } from '../components/ui/select';
-import { Alert } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
-import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Toast, Toaster } from '../components/Toast';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Card } from '../components/ui/card';
 import { Switch } from '../components/ui/switch';
 import type { PipelineList, PipelineSummary, Schedule } from '../pipeline/types';
 
 const sameEnvironments = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x));
+const pipelinePageSize = 25;
 
 export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId?: string) => void } = {}) {
   const [page, setPage] = useState(1);
@@ -43,6 +45,11 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
     return () => { disposed = true; };
   }, [page, refresh]);
 
+  useEffect(() => {
+    const lastPage = Math.max(1, Math.ceil((list?.totalCount ?? 0) / pipelinePageSize));
+    if (page > lastPage) setPage(lastPage);
+  }, [list, page]);
+
   const schedulesFor = (pipelineId: string) => schedules.map(schedule => ({
     schedule, environments: schedule.pipelines.filter(p => p.pipelineId === pipelineId).map(p => p.environment),
   })).filter(entry => entry.environments.length > 0);
@@ -52,13 +59,12 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
 
   function selectSchedule(pipeline: PipelineSummary, alias: string) {
     const attached = attachedEnvironments(alias, pipeline.id);
-    const preferred = environments[pipeline.id] ?? pipeline.environments[0];
-    setScheduling({ pipelineId: pipeline.id, alias, environments: attached.length ? attached : preferred ? [preferred] : [] });
+    setScheduling({ pipelineId: pipeline.id, alias, environments: attached });
   }
 
   function startScheduling(pipeline: PipelineSummary) {
     if (expandedScheduleId === pipeline.id) { setExpandedScheduleId(null); return; }
-    if (scheduling?.pipelineId !== pipeline.id) selectSchedule(pipeline, schedules[0]?.alias ?? '');
+    if (scheduling?.pipelineId !== pipeline.id) setScheduling({ pipelineId: pipeline.id, alias: '', environments: [] });
     setExpandedScheduleId(pipeline.id);
   }
 
@@ -137,13 +143,15 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
         <IconButton icon="refresh" label="Refresh pipelines" loading={loading} disabled={loading || busy} onClick={() => setRefresh(n => n + 1)} />
         <IconLink icon="clock" label="Manage schedules" href="?page=schedules" />
       </Card>
-      {message && <Alert className="notice">{message}</Alert>}
-      {runNotice && <Alert className="notice">Run {runNotice.id} queued. Results are available in <a href={`?page=logs&pipeline=${encodeURIComponent(runNotice.pipelineId)}`}>execution logs</a>.</Alert>}
-      {error && <Alert role="alert" variant="destructive" className="notice">{error}</Alert>}
+      {(message || runNotice || error) && <Toaster>
+        {message && <Toast key={`message:${message}`}>{message}</Toast>}
+        {runNotice && <Toast key={`run:${runNotice.id}`}>Run {runNotice.id} queued. Results are available in <a className="toast-link" href={`?page=logs&pipeline=${encodeURIComponent(runNotice.pipelineId)}`}>execution logs</a>.</Toast>}
+        {error && <Toast key={`error:${error}`} variant="destructive">{error}</Toast>}
+      </Toaster>}
       {loading && <Loading label="Loading pipelines…" />}
       {list && <>
         {list.pipelines.length === 0 ? <p>No pipelines yet. Use + to create one or import a JSON file.</p> : <div className="history-table">
-          <Table><TableCaption>Saved pipelines — page {list.page}</TableCaption>
+          <Table aria-label="Saved pipelines">
             <TableHeader><TableRow><TableHead scope="col">Pipeline</TableHead><TableHead scope="col">Revision</TableHead><TableHead scope="col">Environment</TableHead><TableHead scope="col">Schedules</TableHead><TableHead scope="col">Actions</TableHead></TableRow></TableHeader>
             <TableBody>{list.pipelines.map(pipeline => <Fragment key={pipeline.id}><TableRow>
               <TableCell><strong>{pipeline.name}</strong><p className="muted"><code>{pipeline.id}</code></p></TableCell>
@@ -175,14 +183,15 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
               {scheduling?.pipelineId === pipeline.id && (schedules.length === 0 ? <p>No schedules exist yet. <a href="?page=schedules">Create a schedule</a> first.</p> :
                 <div className="actions" role="group" aria-label={`Add ${pipeline.name} to a schedule`}>
                   <label>Schedule<Select value={scheduling.alias} onChange={e => selectSchedule(pipeline, e.target.value)}>
+                    <option value="">Select a schedule</option>
                     {schedules.map(schedule => <option key={schedule.id} value={schedule.alias}>{schedule.alias} — {describe(schedule.cronExpression)}</option>)}
                   </Select></label>
                   <fieldset className="environment-choices"><legend>Run in environments</legend>
                     {pipeline.environments.map(environment => <div key={environment} className="environment-switch">
-                      <span role="presentation" onClick={() => setScheduling({
+                      <span role="presentation" onClick={() => scheduling.alias && setScheduling({
                         ...scheduling, environments: scheduling.environments.includes(environment) ? scheduling.environments.filter(x => x !== environment) : [...scheduling.environments, environment],
                       })}>{environment}</span>
-                      <Switch aria-label={environment} checked={scheduling.environments.includes(environment)} onCheckedChange={checked => setScheduling({
+                      <Switch aria-label={environment} disabled={!scheduling.alias || busy} checked={scheduling.environments.includes(environment)} onCheckedChange={checked => setScheduling({
                         ...scheduling, environments: checked ? [...scheduling.environments, environment] : scheduling.environments.filter(x => x !== environment),
                       })} />
                     </div>)}
@@ -199,12 +208,9 @@ export function PipelinesPage({ onOpenDesigner }: { onOpenDesigner?: (pipelineId
           </Table>
         </div>}
       </>}
-      <nav className="actions history-pagination" aria-label="Pipeline pagination">
-        <IconButton icon="left" label="Previous pipelines" disabled={loading || busy || page === 1} onClick={() => setPage(n => n - 1)} />
-        <span>Page {page}</span>
-        <IconButton icon="right" label="More pipelines" disabled={loading || busy || !!error || !list?.hasMore} onClick={() => setPage(n => n + 1)} />
-      </nav>
-      {deleting && <ConfirmDialog title={`Delete ${deleting.name}?`} description="Execution history and generated files will be kept." confirmLabel="Delete pipeline" onCancel={() => setDeleting(null)} onConfirm={() => { const pipeline = deleting; setDeleting(null); void remove(pipeline); }} />}
+      <Pagination page={page} pageSize={pipelinePageSize} totalCount={list?.totalCount ?? 0}
+        disabled={loading || busy || !!error} onPageChange={setPage} />
+      <ConfirmDialog open={!!deleting} title={`Delete ${deleting?.name}?`} description="Execution history and generated files will be kept." confirmLabel="Delete pipeline" onCancel={() => setDeleting(null)} onConfirm={() => { if (!deleting) return; const pipeline = deleting; setDeleting(null); void remove(pipeline); }} />
     </main>
   </>;
 }

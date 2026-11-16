@@ -12,16 +12,23 @@ using Parquet;
 using Parquet.Schema;
 using PipelineBuilder.Application.Interfaces;
 using PipelineBuilder.Domain.Pipelines;
+using Polly;
 
 namespace PipelineBuilder.Infrastructure.Files;
 
 internal static class PipelineInputReader
 {
-    public static async IAsyncEnumerable<Dictionary<string, object?>> Read(PipelineStep input, string path, [EnumeratorCancellation] CancellationToken ct)
+    public static async IAsyncEnumerable<Dictionary<string, object?>> Read(PipelineStep input, string path, ResiliencePipeline postgresResilience,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         if (input is ApiInputStep api)
         {
             await foreach (var row in ApiInputReader.Read(api, ct)) yield return row;
+            yield break;
+        }
+        if (input is PostgresInputStep postgres)
+        {
+            await foreach (var row in PostgresInputReader.Read(postgres, postgresResilience, ct)) yield return row;
             yield break;
         }
         if (input is CsvStep csvInput)

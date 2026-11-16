@@ -1,5 +1,5 @@
 import * as Blockly from 'blockly/core';
-import { compileEnvironments, compileWorkspace, definitionToWorkspace, restoreEnvironmentBlocks, schemaBefore, seedWorkspace } from './workspace';
+import { compileEnvironments, compileWorkspace, definitionToWorkspace, resolveWorkspaceText, restoreEnvironmentBlocks, schemaBefore, seedWorkspace } from './workspace';
 import type { Definition } from '../pipeline/types';
 
 describe('pipeline workspace', () => {
@@ -99,6 +99,37 @@ describe('pipeline workspace', () => {
       schema: [{ name: 'id', type: 'string', nullable: true, typeVariable: '${env.COLUMN_TYPE}', nullableVariable: '${env.COLUMN_NULLABLE}' }],
     });
     expect(definition.steps[1]).toMatchObject({ type: 'csvOutput', hasHeaderVariable: '${env.HAS_HEADER}' });
+    const restored = new Blockly.Workspace();
+    try {
+      Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);
+      expect(compileWorkspace(restored)).toEqual(definition);
+    } finally { restored.dispose(); }
+  });
+
+  it('compiles and restores PostgreSQL input and resolves discovery variables', () => {
+    workspace.clear();
+    const input = workspace.newBlock('pipeline_postgresInput');
+    input.data = JSON.stringify({ schema: [{ name: 'id', type: 'int64', nullable: false }], postgres: {
+      host: '', hostVariable: '${env.PG_HOST}', port: '5432', database: 'customers', username: 'reader',
+      password: '${secret.PG_PASSWORD}', sslMode: 'Require', query: 'SELECT id FROM customers',
+    } });
+    const output = workspace.newBlock('pipeline_csvOutput');
+    const path = workspace.newBlock('value_literal');
+    path.setFieldValue('customers.csv', 'VALUE');
+    output.getInput('PATH')!.connection!.connect(path.outputConnection!);
+    input.nextConnection!.connect(output.previousConnection!);
+
+    const variable = workspace.newBlock('define_variable');
+    variable.setFieldValue('database', 'NAME');
+    const databaseValue = workspace.newBlock('value_literal');
+    databaseValue.setFieldValue('customers', 'VALUE');
+    variable.getInput('VALUE')!.connection!.connect(databaseValue.outputConnection!);
+    input.data = JSON.stringify({ ...JSON.parse(input.data!), postgres: { ...JSON.parse(input.data!).postgres, databaseVariable: '${var.database}' } });
+
+    const definition = compileWorkspace(workspace);
+    expect(definition.steps[0]).toMatchObject({ type: 'postgresInput', host: '${env.PG_HOST}', database: '${var.database}', password: '${secret.PG_PASSWORD}' });
+    expect(resolveWorkspaceText('${var.database}@${env.PG_HOST}:${secret.PG_PASSWORD}', workspace, { dev: { PG_HOST: 'db.example' } }, 'dev'))
+      .toBe('customers@db.example:${secret.PG_PASSWORD}');
     const restored = new Blockly.Workspace();
     try {
       Blockly.serialization.workspaces.load(definitionToWorkspace(definition), restored);

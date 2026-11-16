@@ -17,6 +17,7 @@ public sealed class DesignerQueries(PipelineDbContext db) : IDesignerQueries
             """).OrderBy(p => p.Name).ThenBy(p => p.Id).Skip(skip).Take(take).ToArrayAsync(ct);
         return rows.Select(p => new PipelineSummaryRecord(p.Id, p.Name, p.Revision, p.Environments)).ToArray();
     }
+    public Task<int> CountPipelines(CancellationToken ct) => db.Pipelines.CountAsync(p => !p.IsDeleted, ct);
     public async Task<RunRecord?> GetRun(Guid id, CancellationToken ct) => (await db.Runs.AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, ct))?.MapTo();
 
     public Task<RunRecord[]> GetRuns(int skip, int take, Guid? pipelineId, CancellationToken ct) => db.Runs.AsNoTracking()
@@ -24,6 +25,9 @@ public sealed class DesignerQueries(PipelineDbContext db) : IDesignerQueries
         .OrderByDescending(r => r.CreatedAt).ThenByDescending(r => r.Id).Skip(skip).Take(take)
         .Select(r => new RunRecord(r.Id, r.PipelineId, r.Revision, r.Environment, r.Status, r.CreatedAt,
             r.StartedAt, r.FinishedAt, r.RowsRead, r.RowsWritten, r.Error, r.BlockId, r.Trigger)).ToArrayAsync(ct);
+
+    public Task<int> CountRuns(Guid? pipelineId, CancellationToken ct) => db.Runs.AsNoTracking()
+        .CountAsync(r => !pipelineId.HasValue || r.PipelineId == pipelineId.Value, ct);
 
     public Task<bool> HasActiveRun(Guid pipelineId, string environment, CancellationToken ct) =>
         db.Runs.AsNoTracking().AnyAsync(r => r.PipelineId == pipelineId && r.Environment == environment && (r.Status == "Queued" || r.Status == "Running"), ct);

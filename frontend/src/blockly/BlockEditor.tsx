@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as Blockly from 'blockly/core';
 import { seedWorkspace, toolbox } from './workspace';
+import { BlocklyDialogs } from './BlocklyDialogs';
 
 export interface EditorHandle { workspace: () => Blockly.WorkspaceSvg }
 interface Props { onChange: () => void; onSelect: (id: string | null) => void; onReady?: () => void; initialWorkspace?: Record<string, unknown> }
@@ -42,5 +43,5 @@ export const BlockEditor = forwardRef<EditorHandle, Props>(function BlockEditor(
     return () => { observer.disconnect(); current.removeChangeListener(listener); current.dispose(); workspace.current = null; };
   }, []);
 
-  return <div ref={element} className="canvas" role="region" aria-label="Pipeline block canvas" />;
+  return <><div ref={element} className="canvas" role="region" aria-label="Pipeline block canvas" /><BlocklyDialogs /></>;
 });

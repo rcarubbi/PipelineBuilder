@@ -28,6 +28,7 @@ public sealed record DefinitionModel([property: JsonRequired] int FormatVersion,
 [JsonDerivedType(typeof(ExcelInputModel), "excelInput")]
 [JsonDerivedType(typeof(ExcelOutputModel), "excelOutput")]
 [JsonDerivedType(typeof(ApiInputModel), "apiInput")]
+[JsonDerivedType(typeof(PostgresInputModel), "postgresInput")]
 public abstract record StepModel(string Id)
 {
     public abstract StepRecord MapTo();
@@ -44,6 +45,8 @@ public abstract record StepModel(string Id)
         ApiInputRecord api => new ApiInputModel(api.Id, api.Url, api.Schema.Select(ColumnModel.MapFrom).ToArray(), api.DataPath,
             api.Method, api.Format, api.Authentication, api.Username, api.Password, api.Token, api.ApiKeyName, api.ApiKey,
             api.OAuthTokenUrl, api.ClientId, api.ClientSecret, api.Scope, api.NextPath, api.UseLinkHeader, api.Body, api.Headers, api.UseLinkHeaderVariable),
+        PostgresInputRecord postgres => new PostgresInputModel(postgres.Id, postgres.Host, postgres.Port, postgres.Database,
+            postgres.Username, postgres.Password, postgres.SslMode, postgres.Query, postgres.Schema.Select(ColumnModel.MapFrom).ToArray()),
         _ => throw new ArgumentException("Unsupported step.")
     };
 }
@@ -89,6 +92,12 @@ public sealed record ApiInputModel(string Id, string Url, ColumnModel[] Schema, 
     public override StepRecord MapTo() => new ApiInputRecord(Id, Url, Schema?.Select(c => c.MapTo()).ToArray()!, DataPath,
         Method, Format, Authentication, Username, Password, Token, ApiKeyName, ApiKey, OAuthTokenUrl, ClientId, ClientSecret, Scope, NextPath, UseLinkHeader, Body, Headers, UseLinkHeaderVariable);
 }
+public sealed record PostgresInputModel(string Id, string Host, string Port, string Database, string Username, string Password,
+    string SslMode, string Query, ColumnModel[] Schema) : StepModel(Id)
+{
+    public override StepRecord MapTo() => new PostgresInputRecord(Id, Host, Port, Database, Username, Password, SslMode, Query,
+        Schema?.Select(c => c?.MapTo()!).ToArray()!);
+}
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(ComparisonModel), "compare")]
@@ -133,7 +142,7 @@ public sealed record PipelineSummaryResponse(Guid Id, string Name, int Revision,
 {
     public static PipelineSummaryResponse MapFrom(PipelineSummaryRecord pipeline) => new(pipeline.Id, pipeline.Name, pipeline.Revision, pipeline.Environments);
 }
-public sealed record PipelineListResponse(PipelineSummaryResponse[] Pipelines, int Page, bool HasMore);
+public sealed record PipelineListResponse(PipelineSummaryResponse[] Pipelines, int Page, bool HasMore, int TotalCount);
 public sealed record DeletePipelineResponse(bool Deleted);
 public sealed record IssueModel(string BlockId, string Message);
 public sealed record SchemaModel(string BlockId, ColumnModel[] Input, ColumnModel[] Output);
@@ -142,10 +151,11 @@ public sealed record AnalysisResponse(IssueModel[] Issues, SchemaModel[] Schemas
     public static AnalysisResponse MapFrom(AnalysisRecord analysis) => new(analysis.Issues.Select(i => new IssueModel(i.BlockId, i.Message)).ToArray(),
         analysis.Schemas.Select(s => new SchemaModel(s.BlockId, s.Input.Select(ColumnModel.MapFrom).ToArray(), s.Output.Select(ColumnModel.MapFrom).ToArray())).ToArray());
 }
-public sealed record DiscoverSchemaRequest(string Path = "", string Delimiter = ",", bool HasHeader = true, string Format = "csv", string? Sheet = null, ApiInputRecord? Api = null);
+public sealed record DiscoverSchemaRequest(string Path = "", string Delimiter = ",", bool HasHeader = true, string Format = "csv", string? Sheet = null,
+    ApiInputRecord? Api = null, PostgresInputRecord? Postgres = null);
 public sealed record DiscoverSchemaResponse(ColumnModel[] Schema, int SampleLimit, string[]? DataPaths = null);
 public sealed record StartRunRequest([property: JsonRequired] Guid PipelineId, [property: JsonRequired] int Revision, string Environment);
-public sealed record RunHistoryResponse(RunResponse[] Runs, int Page, bool HasMore);
+public sealed record RunHistoryResponse(RunResponse[] Runs, int Page, bool HasMore, int TotalCount);
 public sealed record RunResponse(Guid Id, Guid PipelineId, int Revision, string Environment, string Status, DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt, long RowsRead, long RowsWritten, string? Error, string? BlockId, string Trigger)
 {

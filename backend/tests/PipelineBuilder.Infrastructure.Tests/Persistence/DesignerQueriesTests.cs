@@ -11,6 +11,7 @@ using PipelineBuilder.Infrastructure.Files;
 using PipelineBuilder.Infrastructure.Persistence;
 using Shouldly;
 using Testcontainers.PostgreSql;
+using Polly;
 
 namespace PipelineBuilder.Infrastructure.Tests.Persistence;
 
@@ -69,6 +70,9 @@ public sealed class DesignerQueriesTests
         var firstPage = await _sut.GetRuns(0, 2, null, _ct);
         var secondPage = await _sut.GetRuns(2, 2, null, _ct);
 
+        (await _sut.CountRuns(null, _ct)).ShouldBe(3);
+        (await _sut.CountRuns(pipelineId, _ct)).ShouldBe(3);
+        (await _sut.CountPipelines(_ct)).ShouldBe(1);
         firstPage.Select(r => r.Id).ShouldBe([ids[2], ids[1]]);
         firstPage[0].Status.ShouldBe("Queued");
         firstPage[1].Status.ShouldBe("Failed");
@@ -94,7 +98,7 @@ public sealed class DesignerQueriesTests
         try
         {
             using var host = new HostBuilder().UseContentRoot(root).Build();
-            var files = new PipelineFiles(new ServerPaths(Options.Create(new PipelineFileOptions { InputRoot = "input", OutputRoot = "output" }), host.Services.GetRequiredService<IHostEnvironment>()));
+            var files = new PipelineFiles(new ServerPaths(Options.Create(new PipelineFileOptions { InputRoot = "input", OutputRoot = "output" }), host.Services.GetRequiredService<IHostEnvironment>()), ResiliencePipeline.Empty);
             await File.WriteAllTextAsync(Path.Combine(root, "input/in.csv"), "age\n32\n", _ct);
             var output = Path.Combine(root, "output/existing.parquet");
             await File.WriteAllTextAsync(output, "preserve existing file", _ct);

@@ -10,8 +10,9 @@ public sealed class RunsController(IUseCase<StartRunInput, StartRunOutput> start
     IUseCase<CancelRunInput, CancelRunOutput> cancel, IUseCase<GetRunHistoryInput, GetRunHistoryOutput> history) : ApiController
 {
     [HttpGet]
-    public async Task<ActionResult<RunHistoryResponse>> History(CancellationToken ct, [FromQuery] int page = 1, [FromQuery] Guid? pipelineId = null) =>
-        Respond(await history.Handle(new(page, pipelineId), ct), output => new RunHistoryResponse(output.Runs.Select(RunResponse.MapFrom).ToArray(), output.Page, output.HasMore));
+    public async Task<ActionResult<RunHistoryResponse>> History(CancellationToken ct, [FromQuery] int page = 1, [FromQuery] Guid? pipelineId = null,
+        [FromQuery] int pageSize = GetRunHistoryQuery.DefaultPageSize) =>
+        Respond(await history.Handle(new(page, pipelineId, pageSize), ct), output => new RunHistoryResponse(output.Runs.Select(RunResponse.MapFrom).ToArray(), output.Page, output.HasMore, output.TotalCount));
 
     [HttpPost]
     public async Task<ActionResult<RunResponse>> Start(StartRunRequest request, CancellationToken ct)

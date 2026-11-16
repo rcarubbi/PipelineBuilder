@@ -21,6 +21,7 @@ Blockly.common.defineBlocksWithJsonArray([
   ], previousStatement: 'Pipeline', colour: 20 },
   { type: 'pipeline_parquetInput', message0: 'Read Parquet %1', args0: [{ type: 'input_value', name: 'PATH', check: 'String' }], nextStatement: 'Pipeline', colour: 165 },
   { type: 'pipeline_apiInput', message0: 'Fetch API', nextStatement: 'Pipeline', colour: 165, tooltip: 'Fetch JSON or XML data into rows.' },
+  { type: 'pipeline_postgresInput', message0: 'Read PostgreSQL', nextStatement: 'Pipeline', colour: 165, tooltip: 'Read query results from an external PostgreSQL database.' },
   { type: 'pipeline_excelInput', message0: 'Read Excel %1 sheet %2 header %3', args0: [
     { type: 'input_value', name: 'PATH', check: 'String' }, { type: 'field_input', name: 'SHEET', text: 'Sheet1' },
     { type: 'field_checkbox', name: 'HEADER', checked: true },
@@ -58,7 +59,7 @@ Blockly.common.defineBlocksWithJsonArray([
 
 export const toolbox = {
   kind: 'categoryToolbox', contents: [
-    { kind: 'category', name: 'Input', colour: '165', contents: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'].map(type => ({ kind: 'block', type })) },
+    { kind: 'category', name: 'Input', colour: '165', contents: ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput', 'pipeline_postgresInput'].map(type => ({ kind: 'block', type })) },
     { kind: 'category', name: 'Processing', colour: '230', contents: ['pipeline_map', 'pipeline_filter'].map(type => ({ kind: 'block', type })) },
     { kind: 'category', name: 'Criteria', colour: '285', contents: ['predicate_compare', 'predicate_logic', 'predicate_not', 'predicate_null'].map(type => ({ kind: 'block', type })) },
     { kind: 'category', name: 'Values', colour: '160', contents: ['value_literal', 'value_concat', 'value_utc', 'value_current_environment', 'value_environment', 'define_environment'].map(type => ({ kind: 'block', type })) },
@@ -67,7 +68,7 @@ export const toolbox = {
   ],
 };
 
-export function getBlockData(block: Blockly.Block): { schema?: Column[]; mappings?: Mapping[]; api?: Record<string, unknown>; hasHeaderVariable?: string; predicate?: Record<string, unknown> } {
+export function getBlockData(block: Blockly.Block): { schema?: Column[]; mappings?: Mapping[]; api?: Record<string, unknown>; postgres?: Record<string, unknown>; hasHeaderVariable?: string; predicate?: Record<string, unknown> } {
   const data = block.data ? JSON.parse(block.data) : {};
   if (!data || typeof data !== 'object') throw new Error('Invalid block configuration.');
   return data;
@@ -80,7 +81,7 @@ export function schemaBefore(block: Blockly.Block): Column[] {
   for (let cursor = step.getPreviousBlock(); cursor; cursor = cursor.getPreviousBlock()) previous.unshift(cursor);
   let schema: Column[] = [];
   for (const cursor of previous) {
-    if (['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'].includes(cursor.type)) schema = getBlockData(cursor).schema ?? [];
+    if (['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput', 'pipeline_postgresInput'].includes(cursor.type)) schema = getBlockData(cursor).schema ?? [];
     if (cursor.type === 'pipeline_map') schema = (getBlockData(cursor).mappings ?? []).map(m => m.target);
   }
   return schema;
@@ -92,16 +93,12 @@ function validColumn(column: Column): boolean {
 
 export function compileWorkspace(workspace: Blockly.Workspace): Definition {
   const roots = workspace.getTopBlocks(false);
-  const inputTypes = ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput'];
+  const inputTypes = ['pipeline_csv', 'pipeline_parquetInput', 'pipeline_excelInput', 'pipeline_apiInput', 'pipeline_postgresInput'];
   const pipelines = roots.filter(block => inputTypes.includes(block.type));
   if (pipelines.length !== 1 || roots.some(block => ![...inputTypes, 'define_variable', 'define_environment', 'variables_set'].includes(block.type))) throw new Error('Connect all blocks into one pipeline chain starting with an input, or use variable assignment blocks.');
-  const assignments: Blockly.Block[] = [];
-  for (const root of roots.filter(block => block.type === 'variables_set')) {
-    for (let block: Blockly.Block | null = root; block; block = block.getNextBlock()) {
+  for (const root of roots.filter(block => block.type === 'variables_set'))
+    for (let block: Blockly.Block | null = root; block; block = block.getNextBlock())
       if (block.type !== 'variables_set') throw new Error('Only variable assignments can be connected together.');
-      assignments.push(block);
-    }
-  }
   compileEnvironments(workspace);
   const steps: Step[] = [];
   let block: Blockly.Block | null = pipelines[0];
@@ -143,6 +140,23 @@ export function compileWorkspace(workspace: Blockly.Workspace): Definition {
         });
         break;
       }
+      case 'pipeline_postgresInput': {
+        const config = getBlockData(block);
+        const postgres = config.postgres ?? {};
+        const schema = config.schema;
+        if (!schema?.length || !schema.every(validColumn)) throw new Error('Discover or define the PostgreSQL schema first.');
+        steps.push({
+          type: 'postgresInput', id: block.id,
+          host: String(postgres.hostVariable || postgres.host || ''),
+          port: String(postgres.portVariable || postgres.port || '5432'),
+          database: String(postgres.databaseVariable || postgres.database || ''),
+          username: String(postgres.usernameVariable || postgres.username || ''),
+          password: String(postgres.passwordVariable || postgres.password || ''),
+          sslMode: String(postgres.sslModeVariable || postgres.sslMode || 'Prefer'),
+          query: String(postgres.queryVariable || postgres.query || ''), schema,
+        });
+        break;
+      }
       case 'pipeline_map': {
         const mappings = getBlockData(block).mappings;
         if (!mappings?.length || !mappings.every(m => m && typeof m.source === 'string' && validColumn(m.target))) throw new Error('Configure at least one valid mapping.');
@@ -153,18 +167,73 @@ export function compileWorkspace(workspace: Blockly.Workspace): Definition {
       case 'pipeline_parquet': steps.push({ type: 'parquet', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')) }); break;
       case 'pipeline_csvOutput': steps.push({ type: 'csvOutput', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), delimiter: block.getFieldValue('DELIMITER'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', ...(getBlockData(block).hasHeaderVariable ? { hasHeaderVariable: getBlockData(block).hasHeaderVariable } : {}) }); break;
       case 'pipeline_excelOutput': steps.push({ type: 'excelOutput', id: block.id, path: 'expression', pathExpression: compileText(block.getInputTargetBlock('PATH')), sheet: block.getFieldValue('SHEET'), hasHeader: block.getFieldValue('HEADER') === 'TRUE', ...(getBlockData(block).hasHeaderVariable ? { hasHeaderVariable: getBlockData(block).hasHeaderVariable } : {}) }); break;
-      case 'variables_set': assignments.push(block); break;
+       case 'variables_set': break;
       default: throw new Error(`Unsupported block '${block.type}'.`);
     }
     block = block.getNextBlock();
   }
+  const variables = compileVariables(workspace);
+  if (steps.length > 100 || !['parquet', 'csvOutput', 'excelOutput'].includes(steps.at(-1)?.type ?? '')) throw new Error('Finish the chain with an output (maximum 100 steps).');
+  return { formatVersion: 1, steps, variables };
+}
+
+export function compileVariables(workspace: Blockly.Workspace): NonNullable<Definition['variables']> {
+  const roots = workspace.getTopBlocks(false);
+  const assignments = workspace.getAllBlocks(false).filter(block => block.type === 'variables_set');
   const variables = [
     ...roots.filter(block => block.type === 'define_variable').map(block => ({ name: block.getFieldValue('NAME') as string, value: compileText(block.getInputTargetBlock('VALUE')) })),
     ...assignments.map(block => ({ name: variableName(block), value: compileText(block.getInputTargetBlock('VALUE')) })),
   ];
-  if (variables.some(v => !v.name.trim()) || new Set(variables.map(v => v.name)).size !== variables.length) throw new Error('Variable names must be nonempty and unique.');
-  if (steps.length > 100 || !['parquet', 'csvOutput', 'excelOutput'].includes(steps.at(-1)?.type ?? '')) throw new Error('Finish the chain with an output (maximum 100 steps).');
-  return { formatVersion: 1, steps, variables };
+  if (variables.some(variable => !variable.name.trim()) || new Set(variables.map(variable => variable.name)).size !== variables.length)
+    throw new Error('Variable names must be nonempty and unique.');
+  return variables;
+}
+
+export function resolveWorkspaceText(value: string, workspace: Blockly.Workspace,
+  environments: Record<string, Record<string, string>>, environment: string): string {
+  const variables = new Map(compileVariables(workspace).map(variable => [variable.name, variable.value]));
+  const active = new Set<string>();
+  const evaluate = (expression: TextExpression, depth = 0): string => {
+    if (!expression || depth >= 32) throw new Error('Variable expression is missing or too deeply nested.');
+    switch (expression.kind) {
+      case 'literal': return expression.value;
+      case 'concat': return evaluate(expression.left, depth + 1) + evaluate(expression.right, depth + 1);
+      case 'environment':
+        if (expression.name === 'CURRENT_ENVIRONMENT') return environment;
+        return environments[environment]?.[expression.name] ?? throwMissing(expression.name);
+      case 'variable': {
+        const definition = variables.get(expression.name);
+        if (!definition || active.has(expression.name)) throw new Error(`Missing or circular pipeline variable '${expression.name}'.`);
+        active.add(expression.name);
+        try { return evaluate(definition, depth + 1); } finally { active.delete(expression.name); }
+      }
+      case 'utc': {
+        const format = expression.formatExpression ? evaluate(expression.formatExpression, depth + 1) : expression.format;
+        if (format === 'O') return new Date().toISOString();
+        const now = new Date();
+        // shortcut: discovery supports common UTC format tokens; expand when connection/query templates need other .NET formats.
+        const parts: Record<string, string> = {
+          yyyy: String(now.getUTCFullYear()).padStart(4, '0'), MM: String(now.getUTCMonth() + 1).padStart(2, '0'),
+          dd: String(now.getUTCDate()).padStart(2, '0'), HH: String(now.getUTCHours()).padStart(2, '0'),
+          mm: String(now.getUTCMinutes()).padStart(2, '0'), ss: String(now.getUTCSeconds()).padStart(2, '0'),
+          fff: String(now.getUTCMilliseconds()).padStart(3, '0'),
+        };
+        return format.replace(/yyyy|fff|MM|dd|HH|mm|ss/g, token => parts[token]);
+      }
+    }
+  };
+  const throwMissing = (name: string): never => { throw new Error(`Missing environment variable '${name}'.`); };
+  return value.replace(/\$\{(?:(var|env|secret)\.)?([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, scope: string | undefined, name: string) => {
+    if (scope === 'secret') return match;
+    if (scope === 'var') {
+      const definition = variables.get(name);
+      if (!definition || active.has(name)) throw new Error(`Missing or circular pipeline variable '${name}'.`);
+      active.add(name);
+      try { return evaluate(definition); } finally { active.delete(name); }
+    }
+    if (name === 'CURRENT_ENVIRONMENT') return environment;
+    return environments[environment]?.[name] ?? throwMissing(name);
+  });
 }
 
 export function compileText(block: Blockly.Block | null, depth = 0): TextExpression {
@@ -310,10 +379,21 @@ export function definitionToWorkspace(definition: Definition): Record<string, un
         formatVariable: isVariableReference(step.format) ? step.format : '',
         authentication: isVariableReference(step.authentication) ? 'none' : step.authentication,
         authenticationVariable: isVariableReference(step.authentication) ? step.authentication : '',
+        username: step.username, password: step.password, token: step.token,
         apiKeyName: step.apiKeyName, apiKey: step.apiKey, oauthTokenUrl: step.oauthTokenUrl, clientId: step.clientId,
         clientSecret: step.clientSecret, scope: step.scope, nextPath: step.nextPath, useLinkHeader: step.useLinkHeader,
         useLinkHeaderVariable: step.useLinkHeaderVariable,
         body: step.body, headers: step.headers,
+      } });
+    } else if (step.type === 'postgresInput') {
+      const property = (value: string) => isVariableReference(value) ? { value: '', variable: value } : { value, variable: '' };
+      const host = property(step.host), port = property(step.port), database = property(step.database);
+      const username = property(step.username), password = property(step.password), sslMode = property(step.sslMode), query = property(step.query);
+      block.data = JSON.stringify({ schema: step.schema, postgres: {
+        host: host.value, hostVariable: host.variable, port: port.value, portVariable: port.variable,
+        database: database.value, databaseVariable: database.variable, username: username.value, usernameVariable: username.variable,
+        password: password.value, passwordVariable: password.variable, sslMode: sslMode.value, sslModeVariable: sslMode.variable,
+        query: query.value, queryVariable: query.variable,
       } });
     } else if (step.type === 'csv') {
       block.fields = { DELIMITER: step.delimiter, HEADER: step.hasHeader ? 'TRUE' : 'FALSE' };

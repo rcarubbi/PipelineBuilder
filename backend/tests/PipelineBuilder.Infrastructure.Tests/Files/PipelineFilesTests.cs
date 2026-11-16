@@ -7,11 +7,14 @@ using System.Net.Sockets;
 using System.Text;
 using Parquet;
 using ExcelReader.Core.Reader;
+using Npgsql;
+using Polly;
 using PipelineBuilder.Application.Contracts;
 using PipelineBuilder.Application.Interfaces;
 using PipelineBuilder.Domain.Pipelines;
 using PipelineBuilder.Infrastructure.Files;
 using Shouldly;
+using Testcontainers.PostgreSql;
 
 namespace PipelineBuilder.Infrastructure.Tests.Files;
 
@@ -29,7 +32,7 @@ public sealed class PipelineFilesTests
         Directory.CreateDirectory(Path.Combine(_root, "input"));
         Directory.CreateDirectory(Path.Combine(_root, "output"));
         var options = Options.Create(new PipelineFileOptions { InputRoot = "input", OutputRoot = "output" });
-        _sut = new(new ServerPaths(options, new TestEnvironment { ContentRootPath = _root }));
+        _sut = new(new ServerPaths(options, new TestEnvironment { ContentRootPath = _root }), ResiliencePipeline.Empty);
     }
 
     [TestCleanup]
@@ -73,6 +76,56 @@ public sealed class PipelineFilesTests
         schema.Select(column => (column.Name, column.Type)).ShouldBe([
             ("age", ColumnTypeRecord.Int64), ("full_name", ColumnTypeRecord.String)
         ]);
+    }
+
+    [TestMethod]
+    [TestCategory("Docker")]
+    public async Task PostgresInput_When_QueryReturnsRows_Then_DiscoversAndStreamsTypedData()
+    {
+        await using var container = new PostgreSqlBuilder("postgres:17-alpine").Build();
+        await container.StartAsync(_ct);
+        var connection = new NpgsqlConnectionStringBuilder(container.GetConnectionString()) { SslMode = SslMode.Disable };
+        var host = connection.Host!;
+        var database = connection.Database!;
+        var username = connection.Username!;
+        var password = connection.Password!;
+        var allowedHosts = Environment.GetEnvironmentVariable("PipelinePostgres__AllowedHosts");
+        var testPassword = Environment.GetEnvironmentVariable("PG_TEST_PASSWORD");
+        Environment.SetEnvironmentVariable("PipelinePostgres__AllowedHosts", host);
+        Environment.SetEnvironmentVariable("PG_TEST_PASSWORD", password);
+        try
+        {
+            await using (var db = new NpgsqlConnection(connection.ConnectionString))
+            {
+                await db.OpenAsync(_ct);
+                await using (var create = new NpgsqlCommand("CREATE TABLE public.customers (id integer NOT NULL, name text NOT NULL)", db))
+                    await create.ExecuteNonQueryAsync(_ct);
+                await using var insert = new NpgsqlCommand("INSERT INTO public.customers VALUES (7, 'Ana')", db);
+                await insert.ExecuteNonQueryAsync(_ct);
+            }
+            var input = new PostgresInputStep("postgres", host, connection.Port.ToString(), database,
+                username, "${secret.PG_TEST_PASSWORD}", "Disable", "SELECT id, name FROM public.customers", []);
+
+            var discovered = await _sut.DiscoverPostgres(input, _ct);
+
+            discovered.Select(column => (column.Name, column.Type, column.Nullable)).ShouldBe([
+                ("id", ColumnTypeRecord.Int64, false), ("name", ColumnTypeRecord.String, false)
+            ]);
+            var definition = new DefinitionRecord(1, [
+                new PostgresInputRecord(input.Id, input.Host, input.Port, input.Database, input.Username, input.Password, input.SslMode, input.Query, discovered),
+                new CsvOutputRecord("out", "postgres.csv")
+            ]);
+            var result = await _sut.Execute(definition, _ => Task.FromResult(false), _ct);
+
+            result.RowsRead.ShouldBe(1);
+            result.RowsWritten.ShouldBe(1);
+            (await File.ReadAllTextAsync(Path.Combine(_root, "output/postgres.csv"), _ct)).Replace("\r\n", "\n").ShouldBe("id,name\n7,Ana\n");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PipelinePostgres__AllowedHosts", allowedHosts);
+            Environment.SetEnvironmentVariable("PG_TEST_PASSWORD", testPassword);
+        }
     }
 
     [TestMethod]
